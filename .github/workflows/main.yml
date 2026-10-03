@@ -65,8 +65,16 @@ jobs:
         run: make -j8
 
       - name: Create Disk Image
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         run: macdeployqt porymap.app -dmg
+
+      # Run by hand from the Actions tab, the disk image can be downloaded from the run.
+      - name: Upload Disk Image
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BUILD_NAME }}
+          path: porymap.dmg
 
       - name: Prep Release Directory
         if: startsWith(github.ref, 'refs/tags/')
