@@ -38,7 +38,7 @@ Si el `fieldmap.h` del proyecto define `NUM_TILESETS_PER_LAYOUT` como 1, porymap
 
 - el primario es el único: tiene todos los tiles, metatiles y paletas (`NUM_TILES_IN_PRIMARY`, `NUM_METATILES_IN_PRIMARY` y `NUM_PALS_IN_PRIMARY`, que pueden llegar a 1024, a lo que dejen las máscaras del bloque y a 16);
 - no se carga ningún secundario, ni sus paletas; los `NUM_*_TOTAL` no se usan;
-- desaparece el secundario de la interfaz (panel del layout, nuevo layout, nuevo tileset y los menús de importar y exportar del editor de tilesets);
+- desaparece el secundario de la interfaz: panel del layout, nuevo layout, nuevo tileset, configuración del proyecto y, en el editor de tilesets, los menús de importar y exportar, *Change Number of Metatiles* y *Export Metatiles Image*;
 - `layouts.json` se guarda sin `secondary_tileset`.
 
 El motor es la biblioteca de `tools/mapeado` de albor, copiada en `src/lib/mapeado`: los cambios van primero allí. Necesita metatiles de triple capa. Se compila como porymap ([INSTALL.md](INSTALL.md)); las descargas de abajo son del porymap original, sin las piezas.

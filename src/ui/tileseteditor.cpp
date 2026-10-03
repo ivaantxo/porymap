@@ -32,13 +32,16 @@ TilesetEditor::TilesetEditor(Project *project, Layout *layout, QWidget *parent) 
     validator->setAllowEmpty(true);
     ui->lineEdit_MetatileLabel->setValidator(validator);
 
-    ui->actionShow_Tileset_Divider->setChecked(porymapConfig.showTilesetEditorDivider);
+    ui->actionShow_Tileset_Divider->setChecked(porymapConfig.showTilesetEditorDivider && !Project::usingSingleTileset());
     if (Project::usingSingleTileset()) {
         // There's no secondary tileset to import into or export from.
         for (QAction *action : {ui->actionImport_Secondary_Tiles_Image, ui->actionImport_Secondary_AdvanceMap_Metatiles,
                                 ui->actionExport_Secondary_Tiles_Image, ui->actionExport_Secondary_Porytiles_Layer_Images,
                                 ui->actionShow_Tileset_Divider})
             action->setVisible(false);
+        for (QAction *action : {ui->actionImport_Primary_Tiles_Image, ui->actionImport_Primary_AdvanceMap_Metatiles,
+                                ui->actionExport_Primary_Tiles_Image, ui->actionExport_Primary_Porytiles_Layer_Images})
+            action->setText(QStringLiteral("Tileset..."));
     }
     ui->actionShow_Raw_Metatile_Attributes->setChecked(porymapConfig.showTilesetEditorRawAttributes);
 
@@ -753,7 +756,8 @@ bool TilesetEditor::save() {
     if (this->paletteEditor) {
         this->paletteEditor->setTilesets(this->primaryTileset, this->secondaryTileset);
     }
-    this->ui->statusbar->showMessage(success ? QStringLiteral("Saved primary and secondary Tilesets!")
+    QString savedMessage = Project::usingSingleTileset() ? QStringLiteral("Saved Tileset!") : QStringLiteral("Saved primary and secondary Tilesets!");
+    this->ui->statusbar->showMessage(success ? savedMessage
                                              : QStringLiteral("Failed to save tilesets! See log for details."), 5000);
     if (success) {
         this->hasUnsavedChanges = false;
@@ -765,9 +769,11 @@ bool TilesetEditor::save() {
 void TilesetEditor::importTilesetTiles(Tileset *tileset) {
     bool primary = !tileset->is_secondary;
     QString descriptor = primary ? "primary" : "secondary";
-    QString descriptorCaps = primary ? "Primary" : "Secondary";
+    QString descriptorCaps = primary ? "Primary " : "Secondary ";
+    if (Project::usingSingleTileset())
+        descriptorCaps.clear();
 
-    QString filepath = FileDialog::getOpenFileName(this, QString("Import %1 Tileset Tiles Image").arg(descriptorCaps), "", "Image Files (*.png *.bmp *.jpg *.dib)");
+    QString filepath = FileDialog::getOpenFileName(this, QString("Import %1Tileset Tiles Image").arg(descriptorCaps), "", "Image Files (*.png *.bmp *.jpg *.dib)");
     if (filepath.isEmpty()) {
         return;
     }
@@ -894,8 +900,16 @@ void TilesetEditor::on_actionChange_Metatiles_Count_triggered()
     secondarySpinBox->setMaximum(Project::getNumMetatilesSecondary());
     primarySpinBox->setValue(this->primaryTileset->numMetatiles());
     secondarySpinBox->setValue(this->secondaryTileset->numMetatiles());
-    form.addRow(new QLabel("Primary Tileset"), primarySpinBox);
-    form.addRow(new QLabel("Secondary Tileset"), secondarySpinBox);
+    if (Project::usingSingleTileset()) {
+        // The secondary tileset is an empty placeholder, and has to stay empty.
+        form.addRow(new QLabel("Tileset"), primarySpinBox);
+        secondarySpinBox->setMinimum(0);
+        secondarySpinBox->setValue(0);
+        secondarySpinBox->hide();
+    } else {
+        form.addRow(new QLabel("Primary Tileset"), primarySpinBox);
+        form.addRow(new QLabel("Secondary Tileset"), secondarySpinBox);
+    }
 
     QDialogButtonBox buttonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dialog);
     connect(&buttonBox, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -904,7 +918,8 @@ void TilesetEditor::on_actionChange_Metatiles_Count_triggered()
 
     if (dialog.exec() == QDialog::Accepted) {
         this->primaryTileset->resizeMetatiles(primarySpinBox->value());
-        this->secondaryTileset->resizeMetatiles(secondarySpinBox->value());
+        if (!Project::usingSingleTileset())
+            this->secondaryTileset->resizeMetatiles(secondarySpinBox->value());
 
         // Our selected metatile ID may have become invalid. Make sure it's in-bounds.
         uint16_t metatileId = this->metatileSelector->getSelectedMetatileId();
@@ -1061,7 +1076,8 @@ void TilesetEditor::pasteMetatile(const Metatile &toPaste, QString newLabel) {
 void TilesetEditor::exportTilesImage(Tileset *tileset) {
     bool primary = !tileset->is_secondary;
     QString defaultFilepath = QString("%1/%2_Tiles_Pal%3.png").arg(FileDialog::getDirectory()).arg(tileset->name).arg(this->paletteId());
-    QString filepath = FileDialog::getSaveFileName(this, QString("Export %1 Tiles Image").arg(primary ? "Primary" : "Secondary"), defaultFilepath, "Image Files (*.png)");
+    QString descriptorCaps = Project::usingSingleTileset() ? "" : (primary ? "Primary " : "Secondary ");
+    QString filepath = FileDialog::getSaveFileName(this, QString("Export %1Tiles Image").arg(descriptorCaps), defaultFilepath, "Image Files (*.png)");
     if (!filepath.isEmpty()) {
         QImage image = primary ? this->tileSelector->buildPrimaryTilesIndexedImage() : this->tileSelector->buildSecondaryTilesIndexedImage();
         exportIndexed4BPPPng(image, filepath);
@@ -1122,9 +1138,11 @@ void TilesetEditor::exportPorytilesLayerImages(Tileset *tileset) {
 
 void TilesetEditor::importAdvanceMapMetatiles(Tileset *tileset) {
     bool primary = !tileset->is_secondary;
-    QString descriptorCaps = primary ? "Primary" : "Secondary";
+    QString descriptorCaps = primary ? "Primary " : "Secondary ";
+    if (Project::usingSingleTileset())
+        descriptorCaps.clear();
 
-    QString filepath = FileDialog::getOpenFileName(this, QString("Import %1 Tileset Metatiles from Advance Map 1.92").arg(descriptorCaps), "", "Advance Map 1.92 Metatile Files (*.bvd)");
+    QString filepath = FileDialog::getOpenFileName(this, QString("Import %1Tileset Metatiles from Advance Map 1.92").arg(descriptorCaps), "", "Advance Map 1.92 Metatile Files (*.bvd)");
     if (filepath.isEmpty()) {
         return;
     }

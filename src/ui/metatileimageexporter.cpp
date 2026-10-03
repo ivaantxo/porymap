@@ -45,6 +45,13 @@ MetatileImageExporter::MetatileImageExporter(QWidget *parent, Tileset *primaryTi
         ui->comboBox_SecondaryTileset->setTextItem(m_secondaryTileset->name);
     }
 
+    if (Project::usingSingleTileset()) {
+        // There's only the one tileset.
+        ui->checkBox_PrimaryTileset->setText(QStringLiteral("Tileset"));
+        ui->checkBox_SecondaryTileset->setVisible(false);
+        ui->comboBox_SecondaryTileset->setVisible(false);
+    }
+
     if (m_savedSettings) {
         populate(*m_savedSettings);
     } else {
@@ -144,7 +151,7 @@ void MetatileImageExporter::populate(const Settings &settings) {
     ui->checkBox_PrimaryTileset->setChecked(settings.usePrimaryTileset);
 
     const QSignalBlocker b_SecondaryTileset(ui->spinBox_MetatileStart);
-    ui->checkBox_SecondaryTileset->setChecked(settings.useSecondaryTileset);
+    ui->checkBox_SecondaryTileset->setChecked(settings.useSecondaryTileset && !Project::usingSingleTileset());
 
     const QSignalBlocker b_Placeholders(ui->spinBox_MetatileStart);
     ui->checkBox_Placeholders->setChecked(settings.renderPlaceholders);
