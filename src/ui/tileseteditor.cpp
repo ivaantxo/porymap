@@ -33,6 +33,13 @@ TilesetEditor::TilesetEditor(Project *project, Layout *layout, QWidget *parent) 
     ui->lineEdit_MetatileLabel->setValidator(validator);
 
     ui->actionShow_Tileset_Divider->setChecked(porymapConfig.showTilesetEditorDivider);
+    if (Project::usingSingleTileset()) {
+        // There's no secondary tileset to import into or export from.
+        for (QAction *action : {ui->actionImport_Secondary_Tiles_Image, ui->actionImport_Secondary_AdvanceMap_Metatiles,
+                                ui->actionExport_Secondary_Tiles_Image, ui->actionExport_Secondary_Porytiles_Layer_Images,
+                                ui->actionShow_Tileset_Divider})
+            action->setVisible(false);
+    }
     ui->actionShow_Raw_Metatile_Attributes->setChecked(porymapConfig.showTilesetEditorRawAttributes);
 
     ActiveWindowFilter *filter = new ActiveWindowFilter(this);

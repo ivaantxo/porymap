@@ -24,6 +24,15 @@ Este fork añade la pestaña **Piezas**, junto a Metatiles, Collision y Prefabs,
 - **Capas que se ven:** oculta capas mientras la pestaña está abierta.
 - **Guardar y deshacer:** el tileset se guarda con el mapa. Estampar se deshace con Ctrl+Z; optimizar no, porque guarda el tileset y sus mapas y vacía su historial.
 
+### Un solo tileset por layout
+
+Si el `fieldmap.h` del proyecto define `NUM_TILESETS_PER_LAYOUT` como 1, porymap trabaja con un solo tileset por layout:
+
+- el primario es el único: tiene todos los tiles, metatiles y paletas (`NUM_TILES_IN_PRIMARY`, `NUM_METATILES_IN_PRIMARY` y `NUM_PALS_IN_PRIMARY`, que pueden llegar a 1024, a lo que dejen las máscaras del bloque y a 16);
+- no se carga ningún secundario, ni sus paletas; los `NUM_*_TOTAL` no se usan;
+- desaparece el secundario de la interfaz (panel del layout, nuevo layout, nuevo tileset y los menús de importar y exportar del editor de tilesets);
+- `layouts.json` se guarda sin `secondary_tileset`.
+
 El motor es la biblioteca de `tools/mapeado` de albor, copiada en `src/lib/mapeado`: los cambios van primero allí. Necesita metatiles de triple capa. Se compila como porymap ([INSTALL.md](INSTALL.md)); las descargas de abajo son del porymap original, sin las piezas.
 
 ## Download

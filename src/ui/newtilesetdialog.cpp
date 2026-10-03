@@ -16,6 +16,9 @@ NewTilesetDialog::NewTilesetDialog(Project* project, QWidget *parent) :
 
     ui->checkBox_CheckerboardFill->setChecked(porymapConfig.tilesetCheckerboardFill);
     ui->comboBox_Type->setMinimumContentsLength(12 + this->symbolPrefix.length());
+    // With one tileset per layout every new tileset is a primary one.
+    ui->label_Type->setVisible(!Project::usingSingleTileset());
+    ui->comboBox_Type->setVisible(!Project::usingSingleTileset());
     ui->lineEdit_Name->setValidator(new IdentifierValidator(this->symbolPrefix, this));
     ui->lineEdit_Name->setText(this->symbolPrefix);
 

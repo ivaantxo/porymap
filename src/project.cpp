@@ -29,6 +29,7 @@ int Project::num_tiles_total = 1024;
 int Project::num_metatiles_primary = 512;
 int Project::num_pals_primary = 6;
 int Project::num_pals_total = 13;
+bool Project::single_tileset = false;
 
 Project::Project(QObject *parent) :
     QObject(parent)
@@ -727,7 +728,8 @@ bool Project::saveMapLayouts() {
             layoutObj["border_height"] = layout->border_height;
         }
         layoutObj["primary_tileset"] = layout->tileset_primary_label;
-        layoutObj["secondary_tileset"] = layout->tileset_secondary_label;
+        if (!usingSingleTileset())
+            layoutObj["secondary_tileset"] = layout->tileset_secondary_label;
         layoutObj["border_filepath"] = layout->border_path;
         layoutObj["blockdata_filepath"] = layout->blockdata_path;
         OrderedJson::append(&layoutObj, layout->customData);
@@ -1188,7 +1190,10 @@ bool Project::loadLayoutTilesets(Layout *layout) {
         logError(QString("Failed to load %1: missing primary tileset label.").arg(layout->name));
         return false;
     }
-    if (layout->tileset_secondary_label.isEmpty()) {
+    if (usingSingleTileset()) {
+        // Whatever layouts.json says, there's no secondary tileset. Saving drops it from there.
+        layout->tileset_secondary_label = QString();
+    } else if (layout->tileset_secondary_label.isEmpty()) {
         logError(QString("Failed to load %1: missing secondary tileset label.").arg(layout->name));
         return false;
     }
@@ -1198,7 +1203,7 @@ bool Project::loadLayoutTilesets(Layout *layout) {
                             .arg(layout->tileset_primary_label));
         return false;
     }
-    if (!this->secondaryTilesetLabels.contains(layout->tileset_secondary_label)) {
+    if (!usingSingleTileset() && !this->secondaryTilesetLabels.contains(layout->tileset_secondary_label)) {
         logError(QString("Failed to load %1: unknown secondary tileset label '%2'.")
                             .arg(layout->name)
                             .arg(layout->tileset_secondary_label));
@@ -1211,6 +1216,16 @@ bool Project::loadLayoutTilesets(Layout *layout) {
 }
 
 Tileset* Project::getTileset(const QString &label, bool forceLoad) {
+    if (usingSingleTileset() && label.isEmpty()) {
+        // The empty placeholder that stands in for the secondary tileset.
+        Tileset *placeholder = this->tilesetCache.value(label);
+        if (!placeholder) {
+            placeholder = new Tileset;
+            placeholder->is_secondary = true;
+            cacheTileset(label, placeholder);
+        }
+        return placeholder;
+    }
     if (!this->tilesetLabelsOrdered.contains(label)) {
         logError(QString("Unknown tileset name '%1'.").arg(label));
         return nullptr;
@@ -2268,6 +2283,8 @@ QString Project::getDefaultPrimaryTilesetLabel() const {
 }
 
 QString Project::getDefaultSecondaryTilesetLabel() const {
+    if (usingSingleTileset())
+        return QString();
     QString defaultLabel = projectConfig.defaultSecondaryTileset;
     if (!this->secondaryTilesetLabels.contains(defaultLabel)) {
         QString firstLabel = this->secondaryTilesetLabels.first();
@@ -2325,7 +2342,7 @@ bool Project::readTilesetLabels() {
     Util::numericalModeSort(this->secondaryTilesetLabels);
 
     bool success = true;
-    if (this->secondaryTilesetLabels.isEmpty()) {
+    if (this->secondaryTilesetLabels.isEmpty() && !usingSingleTileset()) {
         logError(QString("Failed to find any secondary tilesets in %1").arg(filename));
         success = false;
     }
@@ -2342,6 +2359,7 @@ bool Project::readFieldmapProperties() {
     const QString numMetatilesPrimaryName = projectConfig.getIdentifier(ProjectIdentifier::define_metatiles_primary);
     const QString numPalsPrimaryName = projectConfig.getIdentifier(ProjectIdentifier::define_pals_primary);
     const QString numPalsTotalName = projectConfig.getIdentifier(ProjectIdentifier::define_pals_total);
+    const QString tilesetsPerLayoutName = projectConfig.getIdentifier(ProjectIdentifier::define_tilesets_per_layout);
     const QString maxMapSizeName = projectConfig.getIdentifier(ProjectIdentifier::define_map_size);
     const QString numTilesPerMetatileName = projectConfig.getIdentifier(ProjectIdentifier::define_tiles_per_metatile);
     const QString mapOffsetWidthName = projectConfig.getIdentifier(ProjectIdentifier::define_map_offset_width);
@@ -2354,6 +2372,7 @@ bool Project::readFieldmapProperties() {
                                                                numMetatilesPrimaryName,
                                                                numPalsPrimaryName,
                                                                numPalsTotalName,
+                                                               tilesetsPerLayoutName,
                                                                maxMapSizeName,
                                                                numTilesPerMetatileName,
                                                                mapOffsetWidthName,
@@ -2375,10 +2394,20 @@ bool Project::readFieldmapProperties() {
             logWarn(QString("Value for '%1' not found. Using default (%2) instead.").arg(name).arg(*dest));
         }
     };
-    loadDefine(numPalsTotalName,        &Project::num_pals_total, 2, Tileset::maxPalettes());
-    loadDefine(numTilesTotalName,       &Project::num_tiles_total, 2, 1024); // 1024 is fixed because we store tile IDs in a 10-bit field.
-    loadDefine(numPalsPrimaryName,      &Project::num_pals_primary, 1, Project::num_pals_total - 1);
-    loadDefine(numTilesPrimaryName,     &Project::num_tiles_primary, 1, Project::num_tiles_total - 1);
+    Project::single_tileset = defines.value(tilesetsPerLayoutName, 2) == 1;
+    if (Project::single_tileset) {
+        // The primary tileset is the only one, so it can take everything.
+        logInfo(QString("'%1' is 1: each layout uses a single tileset.").arg(tilesetsPerLayoutName));
+        loadDefine(numPalsPrimaryName,  &Project::num_pals_primary, 1, Tileset::maxPalettes());
+        loadDefine(numTilesPrimaryName, &Project::num_tiles_primary, 1, 1024);
+        Project::num_pals_total = Project::num_pals_primary;
+        Project::num_tiles_total = Project::num_tiles_primary;
+    } else {
+        loadDefine(numPalsTotalName,        &Project::num_pals_total, 2, Tileset::maxPalettes());
+        loadDefine(numTilesTotalName,       &Project::num_tiles_total, 2, 1024); // 1024 is fixed because we store tile IDs in a 10-bit field.
+        loadDefine(numPalsPrimaryName,      &Project::num_pals_primary, 1, Project::num_pals_total - 1);
+        loadDefine(numTilesPrimaryName,     &Project::num_tiles_primary, 1, Project::num_tiles_total - 1);
+    }
 
     // This maximum is overly generous, because until we parse the appropriate masks from the project
     // we don't actually know what the maximum number of metatiles is.

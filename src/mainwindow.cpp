@@ -1481,6 +1481,9 @@ bool MainWindow::setProjectUI() {
     const QSignalBlocker b_SecondaryTileset(ui->comboBox_SecondaryTileset);
     ui->comboBox_SecondaryTileset->clear();
     ui->comboBox_SecondaryTileset->addItems(project->secondaryTilesetLabels);
+    ui->label_SecondaryTileset->setVisible(!Project::usingSingleTileset());
+    ui->comboBox_SecondaryTileset->setVisible(!Project::usingSingleTileset());
+    ui->label_PrimaryTileset->setText(Project::usingSingleTileset() ? QStringLiteral("Tileset") : QStringLiteral("Primary Tileset"));
 
     const QSignalBlocker b_LayoutSelector(ui->comboBox_LayoutSelector);
     ui->comboBox_LayoutSelector->clear();

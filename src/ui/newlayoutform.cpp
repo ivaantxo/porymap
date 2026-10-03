@@ -35,6 +35,10 @@ void NewLayoutForm::initUi(Project *project) {
         ui->comboBox_PrimaryTileset->addItems(m_project->primaryTilesetLabels);
         ui->comboBox_SecondaryTileset->addItems(m_project->secondaryTilesetLabels);
 
+        ui->label_SecondaryTileset->setVisible(!Project::usingSingleTileset());
+        ui->comboBox_SecondaryTileset->setVisible(!Project::usingSingleTileset());
+        ui->label_PrimaryTileset->setText(Project::usingSingleTileset() ? QStringLiteral("Tileset") : QStringLiteral("Primary Tileset"));
+
         ui->spinBox_MapWidth->setMaximum(m_project->getMaxMapWidth());
         ui->spinBox_MapHeight->setMaximum(m_project->getMaxMapHeight());
     }
@@ -66,7 +70,7 @@ Layout::Settings NewLayoutForm::settings() const {
         settings.borderHeight = DEFAULT_BORDER_HEIGHT;
     }
     settings.primaryTilesetLabel = ui->comboBox_PrimaryTileset->currentText();
-    settings.secondaryTilesetLabel = ui->comboBox_SecondaryTileset->currentText();
+    settings.secondaryTilesetLabel = Project::usingSingleTileset() ? QString() : ui->comboBox_SecondaryTileset->currentText();
     return settings;
 }
 
@@ -75,7 +79,7 @@ bool NewLayoutForm::validate() {
     bool valid = true;
     if (!validateMapDimensions()) valid = false;
     if (!validatePrimaryTileset()) valid = false;
-    if (!validateSecondaryTileset()) valid = false;
+    if (!Project::usingSingleTileset() && !validateSecondaryTileset()) valid = false;
     return valid;
 }
 

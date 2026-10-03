@@ -267,11 +267,16 @@ public:
     static int getNumTilesTotal() { return num_tiles_total; }
     static int getNumTilesSecondary() { return getNumTilesTotal() - getNumTilesPrimary(); }
     static int getNumMetatilesPrimary() { return num_metatiles_primary; }
-    static int getNumMetatilesTotal() { return Block::getMaxMetatileId() + 1; }
+    static int getNumMetatilesTotal() { return usingSingleTileset() ? getNumMetatilesPrimary() : Block::getMaxMetatileId() + 1; }
     static int getNumMetatilesSecondary() { return getNumMetatilesTotal() - getNumMetatilesPrimary(); }
     static int getNumPalettesPrimary(){ return num_pals_primary; }
     static int getNumPalettesTotal() { return num_pals_total; }
     static int getNumPalettesSecondary() { return getNumPalettesTotal() - getNumPalettesPrimary(); }
+
+    // One tileset per layout: the project's fieldmap.h defines NUM_TILESETS_PER_LAYOUT as 1.
+    // Then the primary tileset is the only one: it has all the tiles, metatiles and palettes,
+    // and the secondary is an empty placeholder that is never loaded (its label is empty).
+    static bool usingSingleTileset() { return single_tileset; }
     static QString getEmptyMapsecName();
     static QString getMapGroupPrefix();
 
@@ -373,6 +378,7 @@ private:
     static int num_metatiles_primary;
     static int num_pals_primary;
     static int num_pals_total;
+    static bool single_tileset;
 
 signals:
     void fileChanged(const QString &filepath);
