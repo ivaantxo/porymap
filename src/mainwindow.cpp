@@ -3,6 +3,7 @@
 #include "project.h"
 #include "log.h"
 #include "editor.h"
+#include "piecestamper.h"
 #include "prefabcreationdialog.h"
 #include "eventframes.h"
 #include "bordermetatilespixmapitem.h"
@@ -445,6 +446,8 @@ void MainWindow::initEditor() {
     connect(ui->toolButton_deleteEvent, &QAbstractButton::clicked, this->editor, &Editor::deleteSelectedEvents);
     connect(ui->graphicsView_Connections, &ConnectionsView::pressedDelete, this->editor, &Editor::removeSelectedConnection);
 
+    initPieceStamper();
+
     loadUserSettings();
 
     undoAction = editor->editGroup.createUndoAction(this, tr("&Undo"));
@@ -489,6 +492,38 @@ void MainWindow::initEditor() {
     connect(this->ui->spinner_HealID, QOverload<int>::of(&QSpinBox::valueChanged), [this](int value) {
         this->editor->selectedEventIndexChanged(value, Event::Group::Heal);
     });
+}
+
+void MainWindow::initPieceStamper() {
+    this->pieceStamper = new PieceStamper(this->editor, this);
+    this->editor->pieceStamper = this->pieceStamper;
+    ui->mapViewTab->addTab(this->pieceStamper, QStringLiteral("Piezas"));
+
+    // Stamping and the Tileset Editor change the same tileset, and the Tileset Editor
+    // works on its own copy, so stamping waits until that copy has nothing unsaved.
+    this->pieceStamper->canEditTileset = [this] {
+        if (this->tilesetEditor && this->tilesetEditor->hasUnsavedEdits()) {
+            WarningMessage::show(QStringLiteral("El editor de tilesets tiene cambios sin guardar."),
+                                 QStringLiteral("Guárdalos o descártalos antes de estampar u optimizar: los dos cambian el mismo tileset."),
+                                 this);
+            return false;
+        }
+        return true;
+    };
+    this->pieceStamper->tilesetEdited = [this] {
+        if (this->tilesetEditor && this->editor->layout)
+            this->tilesetEditor->updateTilesets(this->editor->layout->tileset_primary_label,
+                                                this->editor->layout->tileset_secondary_label);
+        updateWindowTitle();
+    };
+    this->pieceStamper->layoutsSaved = [this] {
+        updateWindowTitle();
+        updateMapList();
+    };
+    this->pieceStamper->redrawLayout = [this] {
+        if (this->editor->map_item)
+            refreshAfterPalettePreviewChange();
+    };
 }
 
 void MainWindow::openEditHistory() {
@@ -1845,6 +1880,8 @@ void MainWindow::updateTilesetEditor() {
             editor->ui->comboBox_SecondaryTileset->currentText()
         );
     }
+    if (this->pieceStamper)
+        this->pieceStamper->refresh();
 }
 
 double MainWindow::getMetatilesZoomScale() {
@@ -2240,10 +2277,13 @@ void MainWindow::on_mapViewTab_tabBarClicked(int index)
         {MapViewTab::Metatiles, Editor::EditMode::Metatiles},
         {MapViewTab::Collision, Editor::EditMode::Collision},
         {MapViewTab::Prefabs,   Editor::EditMode::Metatiles},
+        {MapViewTab::Pieces,    Editor::EditMode::Metatiles},
     };
     if (tabIndexToEditMode.contains(index)) {
         editor->setEditMode(tabIndexToEditMode.value(index));
     }
+    if (this->pieceStamper)
+        this->pieceStamper->setTabOpen(index == MapViewTab::Pieces);
 
     if (index == MapViewTab::Metatiles) {
         refreshMetatileViews();
@@ -2734,6 +2774,8 @@ void MainWindow::onTilesetsSaved(QString primaryTilesetLabel, QString secondaryT
     }
     if (updated)
         redrawMapScene();
+    if (this->pieceStamper)
+        this->pieceStamper->refresh();
 }
 
 void MainWindow::onMapRulerStatusChanged(const QString &status) {

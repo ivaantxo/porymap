@@ -32,6 +32,7 @@
 
 class EventPixmapItem;
 class MetatilesPixmapItem;
+class PieceStamper;
 
 class Editor : public QObject
 {
@@ -55,6 +56,9 @@ public:
 
     Settings *settings;
     GridSettings gridSettings;
+
+    PieceStamper *pieceStamper = nullptr;
+    bool isStampingPieces() const;
 
     void setProject(Project * project);
     bool saveAll();

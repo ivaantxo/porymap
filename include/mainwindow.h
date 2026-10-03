@@ -46,6 +46,8 @@ namespace Ui {
 class MainWindow;
 }
 
+class PieceStamper;
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -317,6 +319,7 @@ signals:
 private:
     QLabel *label_MapRulerStatus = nullptr;
     QPointer<TilesetEditor> tilesetEditor = nullptr;
+    PieceStamper *pieceStamper = nullptr;
     QPointer<RegionMapEditor> regionMapEditor = nullptr;
     QPointer<ShortcutsEditor> shortcutsEditor = nullptr;
     QPointer<MapImageExporter> mapImageExporter = nullptr;
@@ -435,6 +438,7 @@ private:
     void initCustomUI();
     void initExtraSignals();
     void initEditor();
+    void initPieceStamper();
     void initMiscHeapObjects();
     void initMapList();
     void initShortcuts();
@@ -492,6 +496,7 @@ struct MapViewTab {
         Metatiles,
         Collision,
         Prefabs,
+        Pieces,
     };
 };
 

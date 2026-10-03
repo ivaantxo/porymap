@@ -33,6 +33,7 @@ public:
     bool active;
     bool has_mouse = false;
     bool right_click;
+    bool trackPixelMoves = false; // Emit mouseEvent for moves inside a metatile too (stamping pieces)
 
     int paint_tile_initial_x;
     int paint_tile_initial_y;
@@ -106,6 +107,7 @@ signals:
     void mouseEvent(QGraphicsSceneMouseEvent *, LayoutPixmapItem *);
     void hoverEntered(const QPoint &pos);
     void hoverChanged(const QPoint &pos);
+    void hoverPixelMoved(const QPointF &pos);
     void hoverCleared();
 
 protected:

@@ -76,6 +76,12 @@ public:
     bool appendToMetatiles(const QString &filepath, const QString &friendlyName, bool usingAsm);
 
     void setTilesImage(const QImage &image);
+    const QImage &tilesImage() const { return m_tilesImage; }
+
+    // Set when porymap edits the tileset in place outside the Tileset Editor
+    // (stamping pieces onto a map), so that it gets saved along with the layouts.
+    bool hasUnsavedChanges() const { return m_hasUnsavedChanges; }
+    void setHasUnsavedChanges(bool hasUnsavedChanges) { m_hasUnsavedChanges = hasUnsavedChanges; }
 
     void setMetatiles(const QList<Metatile*> &metatiles);
     void addMetatile(Metatile* metatile);
@@ -113,6 +119,7 @@ private:
     QList<QImage> m_tiles;
     QImage m_tilesImage;
     bool m_hasUnsavedTilesImage = false;
+    bool m_hasUnsavedChanges = false;
 };
 
 #endif // TILESET_H

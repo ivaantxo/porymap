@@ -1329,6 +1329,8 @@ void UserConfig::parseConfigKeyValue(QString key, QString value) {
         this->useEncounterJson = getConfigBool(key, value);
     } else if (key == "custom_scripts") {
         this->parseCustomScripts(value);
+    } else if (key == "stamp_pieces") {
+        this->stampPieces = value.split(",", Qt::SkipEmptyParts);
     } else {
         logWarn(QString("Invalid config key found in config file %1: '%2'").arg(this->filepath()).arg(key));
     }
@@ -1343,12 +1345,14 @@ QMap<QString, QString> UserConfig::getKeyValueMap() {
     map.insert("recent_map_or_layout", this->recentMapOrLayout);
     map.insert("use_encounter_json", QString::number(this->useEncounterJson));
     map.insert("custom_scripts", this->outputCustomScripts());
+    map.insert("stamp_pieces", this->stampPieces.join(","));
     return map;
 }
 
 void UserConfig::init() {
     this->useEncounterJson = true;
     this->customScripts.clear();
+    this->stampPieces.clear();
 }
 
 // Read input from the config to get the script paths and whether each is enabled or disbled.

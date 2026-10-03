@@ -1,0 +1,182 @@
+// Mapeado: arte libre por capas dentro del tileset, como porytiles pero pintando el mapa.
+//
+// Es la biblioteca. No lee ni escribe archivos: trabaja con lo que le pasan en memoria,
+// para que la pueda usar igual la linea de comandos (main.cpp) que porymap.
+//
+// Cada mapa tiene tres capas de pixeles (baja, media, alta). Se pinta estampando piezas
+// de arte libre (Estampar), y el tileset se va rellenando solo: colores, tiles de 8x8
+// con volteos y metatiles. Optimizar lo reempaqueta cuando se llena.
+//
+// Por debajo las dos usan Compilar, que trocea el arte de los mapas en casillas de
+// 16x16 y saca de ahi los metatiles, los tiles y las paletas, y reescribe el blockdata.
+//
+// El comportamiento, el nivel y la colision NO salen del arte: se editan aparte, los
+// dos primeros en los atributos del metatile y la colision en el bloque. Por eso cada
+// compilacion parte de lo que habia antes y lo respeta:
+//
+//   - Una casilla cuyo arte no ha cambiado se queda con su metatile, sus atributos y su
+//     colision. Si alguien pinto ahi un duplicado con otro comportamiento, se mantiene.
+//   - Una casilla con arte nuevo hereda los atributos de otro metatile que ya tuviera
+//     ese mismo arte, si lo hay, y si no se queda en comportamiento normal y nivel auto.
+//     La colision siempre es la que tenia la casilla.
+//   - Los metatiles y los tiles que siguen existiendo conservan su numero, para que el
+//     blockdata y las referencias desde codigo no se muevan.
+//   - Los metatiles fijados (con nombre, porque los usa el codigo aunque no esten en
+//     ningun mapa) se conservan siempre en su numero, con su arte de antes.
+#ifndef MAPEADO_H
+#define MAPEADO_H
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace mapeado {
+
+// Color de GBA (BGR555), o TRANSPARENTE.
+typedef uint16_t Color;
+const Color TRANSPARENTE = 0x8000;
+
+Color DeRgb(int r, int g, int b);
+void ARgb(Color c, int *r, int *g, int *b);
+
+enum Capa { CAPA_BAJA, CAPA_MEDIA, CAPA_ALTA, NUM_CAPAS };
+
+struct Imagen {
+    int ancho = 0, alto = 0;
+    std::vector<Color> px;
+
+    Imagen() {}
+    Imagen(int w, int h) : ancho(w), alto(h), px(w * h, TRANSPARENTE) {}
+    Color &en(int x, int y) { return px[y * ancho + x]; }
+    Color en(int x, int y) const { return px[y * ancho + x]; }
+};
+
+// Lo que el juego sabe cargar (include/fieldmap.h y include/global.fieldmap.h).
+struct Formato {
+    int maxTiles = 1008;
+    int maxMetatiles = 0x7FFF;
+    int maxPaletas = 15;
+    uint16_t mascaraId = 0x7FFF;
+    uint16_t mascaraColision = 0x8000;
+};
+
+typedef std::array<uint8_t, 64> Tile;        // indices de color 0-15, por filas
+typedef std::array<Color, 16> Paleta;        // la 0 es la transparente
+typedef std::array<uint16_t, 12> Metatile;   // 4 entradas por capa: baja, media, alta
+
+struct Tileset {
+    std::vector<Tile> tiles;
+    std::vector<Paleta> paletas;
+    std::vector<Metatile> metatiles;
+    std::vector<uint16_t> atributos;
+};
+
+struct Layout {
+    std::string nombre;
+    int ancho = 0, alto = 0;              // en casillas
+    Imagen capas[NUM_CAPAS];              // ancho*16 x alto*16
+    bool tieneArteBorde = false;
+    Imagen borde[NUM_CAPAS];              // 32x32, si tieneArteBorde
+    std::vector<uint16_t> bloques;        // los de antes; vacio si no habia
+    std::vector<uint16_t> bloquesBorde;   // los 4 de antes
+};
+
+struct Fijado {
+    std::string nombre;
+    int metatile;
+};
+
+struct Entrada {
+    Formato formato;
+    Tileset anterior;
+    std::vector<Layout> layouts;          // todos los que usan el tileset
+    std::vector<Fijado> fijados;
+    std::vector<int> tilesFijos;          // tiles que no se tocan (animaciones)
+    bool compactar = false;               // renumerar sin respetar los numeros de antes
+};
+
+struct Estadisticas {
+    int tiles = 0;                        // incluido el 0, transparente
+    int metatiles = 0;                    // los que existen, sin contar huecos
+    int metatilesHuecos = 0;              // numeros libres por debajo del ultimo
+    int paletas = 0;
+    std::vector<int> coloresPorPaleta;
+    int metatilesNuevos = 0;
+    int metatilesQuitados = 0;
+    std::vector<int> metatilesPorLayout;  // metatiles distintos en cada layout
+};
+
+struct Salida {
+    Tileset tileset;
+    std::vector<std::vector<uint16_t>> bloques;
+    std::vector<std::vector<uint16_t>> bloquesBorde;
+    Estadisticas est;
+    std::vector<std::string> avisos;
+};
+
+// Devuelve false y deja el motivo en `error` si no cabe o el arte no es valido.
+bool Compilar(const Entrada &entrada, Salida &salida, std::string &error);
+
+// ---------------------------------------------------------------------------------
+// Pintar en el editor
+//
+// Lo que necesita porymap para pintar arte libre directamente en el mapa: una pieza
+// (cualquier imagen de lado multiplo de 8, sin paleta fijada) se estampa en una capa,
+// y lo que haga falta (colores, tiles, un metatile) se mete en el tileset en ese
+// momento. Si no hay sitio, no se pinta y se dice que falta.
+// ---------------------------------------------------------------------------------
+
+// Un mapa que usa el tileset: hace falta conocerlos todos para saber que esta en uso.
+struct MapaDelTileset {
+    std::string nombre;
+    int ancho = 0, alto = 0;              // en casillas
+    std::vector<uint16_t> bloques;
+    std::vector<uint16_t> borde;          // 4
+};
+
+enum Resultado {
+    ESTAMPADO,
+    SIN_HUECO_TILES,
+    SIN_HUECO_PALETAS,
+    SIN_HUECO_METATILES,
+    DEMASIADOS_COLORES,                   // mas de 15 en un trozo de 8x8
+    PIEZA_NO_VALIDA,
+};
+
+struct Estampado {
+    Resultado resultado = ESTAMPADO;
+    std::string mensaje;
+    int casillas = 0;                     // casillas del mapa que cambian
+    int metatilesNuevos = 0, tilesNuevos = 0, coloresNuevos = 0;
+};
+
+// Estampa `pieza` en la capa `capa` de mapas[objetivo], con su esquina en (x, y) en
+// pixeles, multiplos de 8. Lo que caiga fuera del mapa se ignora. Con `reemplazar`, lo
+// transparente de la pieza borra la capa; sin el, deja lo que hubiera debajo.
+//
+// La casilla cuyo arte cambia pasa a un metatile con ese arte si ya hay uno (el que
+// tenga sus mismos atributos, si puede ser). Si no, se crea en un hueco del tileset
+// con los atributos que tenia la casilla. La colision de la casilla no cambia.
+//
+// Si algo no cabe no toca nada: ni el tileset ni el mapa.
+Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &mapas, int objetivo,
+                   const Imagen &pieza, int x, int y, Capa capa, bool reemplazar,
+                   const std::vector<int> &tilesFijos);
+
+// Reempaqueta el tileset desde lo que hay pintado en sus mapas: junta metatiles
+// duplicados, quita los que no usa ningun mapa (salvo los fijados) y deja libres los
+// tiles y colores que sobran. Respeta atributos y colision, y sin `compactar` tambien
+// los numeros de lo que sigue. Es lo que libera hueco cuando estampar dice que no cabe.
+bool Optimizar(const Formato &f, const Tileset &ts, const std::vector<MapaDelTileset> &mapas,
+               const std::vector<Fijado> &fijados, const std::vector<int> &tilesFijos, bool compactar,
+               Salida &salida, std::string &error);
+
+// Lo contrario: las tres capas de un metatile, o de un mapa entero, desde el tileset.
+void PintarMetatile(const Tileset &ts, int metatile, Imagen capas[NUM_CAPAS], int x0, int y0);
+void PintarLayout(const Tileset &ts, const std::vector<uint16_t> &bloques, int ancho, int alto,
+                  uint16_t mascaraId, Imagen capas[NUM_CAPAS]);
+
+} // namespace mapeado
+
+#endif // MAPEADO_H

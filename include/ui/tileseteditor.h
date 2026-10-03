@@ -59,6 +59,7 @@ public:
     void update(Layout *layout, QString primaryTilsetLabel, QString secondaryTilesetLabel);
     void updateLayout(Layout *layout);
     void updateTilesets(QString primaryTilsetLabel, QString secondaryTilesetLabel);
+    bool hasUnsavedEdits() const { return this->hasUnsavedChanges; }
     bool selectMetatile(uint16_t metatileId);
     uint16_t getSelectedMetatileId();
     void setMetatileLabel(QString label);

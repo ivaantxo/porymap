@@ -1,4 +1,5 @@
 #include "editor.h"
+#include "piecestamper.h"
 #include "eventpixmapitem.h"
 #include "imageproviders.h"
 #include "log.h"
@@ -1207,7 +1208,9 @@ void Editor::updateCursorRectVisibility() {
                         && mouseInMap
                         // Only show the tile cursor for tools that apply at a specific tile
                         && editAction != EditAction::Select
-                        && editAction != EditAction::Move;
+                        && editAction != EditAction::Move
+                        // Stamping pieces shows the piece itself instead
+                        && !isStampingPieces();
 
         if (visible != this->cursorMapTileRect->isVisible()) {
             this->cursorMapTileRect->setVisible(visible);
@@ -1437,10 +1440,22 @@ bool Editor::isMiddleButtonScrollInProgress() const {
     return ui->graphicsView_Map->getIsMiddleButtonScrollInProgress();
 }
 
+bool Editor::isStampingPieces() const {
+    return this->pieceStamper
+        && this->pieceStamper->isActive()
+        && this->editMode == EditMode::Metatiles
+        && getEditAction() == EditAction::Paint;
+}
+
 void Editor::mouseEvent_map(QGraphicsSceneMouseEvent *event, LayoutPixmapItem *item) {
     auto editAction = getEditAction();
     if (editAction == EditAction::Move || isMiddleButtonScrollInProgress()) {
         event->ignore();
+        return;
+    }
+
+    if (isStampingPieces() && !dynamic_cast<CollisionPixmapItem*>(item)) {
+        this->pieceStamper->mapMouseEvent(event, item);
         return;
     }
 
@@ -1656,6 +1671,10 @@ void Editor::displayMapMetatiles() {
     connect(map_item, &LayoutPixmapItem::hoverEntered, this, &Editor::onMapHoverEntered);
     connect(map_item, &LayoutPixmapItem::hoverChanged, this, &Editor::onMapHoverChanged);
     connect(map_item, &LayoutPixmapItem::hoverCleared, this, &Editor::onMapHoverCleared);
+    if (this->pieceStamper) {
+        connect(map_item, &LayoutPixmapItem::hoverPixelMoved, this->pieceStamper, &PieceStamper::mapHoverMoved);
+        connect(map_item, &LayoutPixmapItem::hoverCleared, this->pieceStamper, &PieceStamper::mapHoverCleared);
+    }
 
     map_item->draw(true);
     scene->addItem(map_item);

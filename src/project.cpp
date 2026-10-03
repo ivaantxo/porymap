@@ -1322,6 +1322,10 @@ bool Project::saveAll() {
         if (!saveLayout(layout))
             success = false;
     }
+    for (auto tileset : this->tilesetCache) {
+        if (tileset && tileset->hasUnsavedChanges() && !tileset->save())
+            success = false;
+    }
     if (!saveGlobalData()) success = false;
     return success;
 }
@@ -1457,6 +1461,12 @@ bool Project::saveLayout(Layout *layout) {
 
     if (!layout->save(this->root))
         return false;
+
+    // Stamping pieces edits the tileset along with the layout, so they're saved together.
+    for (Tileset *tileset : {layout->tileset_primary, layout->tileset_secondary}) {
+        if (tileset && tileset->hasUnsavedChanges() && !tileset->save())
+            return false;
+    }
 
     // Update global data structures with current map data.
     if (!this->orderedLayoutIdsMaster.contains(layout->id)) {
@@ -3570,6 +3580,12 @@ bool Project::hasUnsavedChanges() {
     // Check maps for unsaved changes
     for (const auto &map : this->maps) {
         if (map->hasUnsavedChanges())
+            return true;
+    }
+
+    // Check tilesets edited by stamping pieces
+    for (const auto &tileset : this->tilesetCache) {
+        if (tileset && tileset->hasUnsavedChanges())
             return true;
     }
     return false;

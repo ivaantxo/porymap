@@ -59,6 +59,7 @@ SOURCES += src/core/advancemapparser.cpp \
     src/core/network.cpp \
     src/core/paletteutil.cpp \
     src/core/parseutil.cpp \
+    src/core/stamping.cpp \
     src/core/tile.cpp \
     src/core/tileset.cpp \
     src/core/utility.cpp \
@@ -70,6 +71,7 @@ SOURCES += src/core/advancemapparser.cpp \
     src/lib/fex/parser.cpp \
     src/lib/collapsiblesection.cpp \
     src/lib/orderedjson.cpp \
+    src/lib/mapeado/mapeado.cpp \
     src/core/regionmapeditcommands.cpp \
     src/scriptapi/apimap.cpp \
     src/scriptapi/apioverlay.cpp \
@@ -92,6 +94,7 @@ SOURCES += src/core/advancemapparser.cpp \
     src/ui/gridsettings.cpp \
     src/ui/newmapconnectiondialog.cpp \
     src/ui/overlay.cpp \
+    src/ui/piecestamper.cpp \
     src/ui/prefab.cpp \
     src/ui/projectsettingseditor.cpp \
     src/ui/regionmaplayoutpixmapitem.cpp \
@@ -177,6 +180,7 @@ HEADERS  += include/core/advancemapparser.h \
     include/core/network.h \
     include/core/paletteutil.h \
     include/core/parseutil.h \
+    include/core/stamping.h \
     include/core/tile.h \
     include/core/tileset.h \
     include/core/utility.h \
@@ -191,6 +195,7 @@ HEADERS  += include/core/advancemapparser.h \
     include/lib/fex/lexer.h \
     include/lib/fex/parser.h \
     include/lib/collapsiblesection.h \
+    include/lib/mapeado/mapeado.h \
     include/lib/orderedmap.h \
     include/lib/orderedjson.h \
     include/ui/aboutporymap.h \
@@ -264,6 +269,7 @@ HEADERS  += include/core/advancemapparser.h \
     include/ui/shortcut.h \
     include/ui/shortcutseditor.h \
     include/ui/multikeyedit.h \
+    include/ui/piecestamper.h \
     include/ui/prefab.h \
     include/ui/preferenceeditor.h \
     include/ui/regionmappropertiesdialog.h \
@@ -331,6 +337,7 @@ INCLUDEPATH += include
 INCLUDEPATH += include/core
 INCLUDEPATH += include/ui
 INCLUDEPATH += include/lib
+INCLUDEPATH += include/lib/mapeado
 INCLUDEPATH += forms
 
 include(src/vendor/QtGifImage/gifimage/qtgifimage.pri)

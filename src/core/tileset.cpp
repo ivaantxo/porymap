@@ -26,7 +26,8 @@ Tileset::Tileset(const Tileset &other)
       palettes(other.palettes),
       palettePreviews(other.palettePreviews),
       m_tilesImage(other.m_tilesImage.copy()),
-      m_hasUnsavedTilesImage(other.m_hasUnsavedTilesImage)
+      m_hasUnsavedTilesImage(other.m_hasUnsavedTilesImage),
+      m_hasUnsavedChanges(other.m_hasUnsavedChanges)
 {
     for (auto tile : other.m_tiles) {
         m_tiles.append(tile.copy());
@@ -52,6 +53,7 @@ Tileset &Tileset::operator=(const Tileset &other) {
     metatileLabels = other.metatileLabels;
     palettes = other.palettes;
     palettePreviews = other.palettePreviews;
+    m_hasUnsavedChanges = other.m_hasUnsavedChanges;
 
     m_tiles.clear();
     for (auto tile : other.m_tiles) {
@@ -622,6 +624,11 @@ bool Tileset::loadTilesImage(QImage *importedImage) {
     return true;
 }
 
+void Tileset::setTilesImage(const QImage &image) {
+    QImage copy = image;
+    loadTilesImage(&copy);
+}
+
 bool Tileset::saveTilesImage() {
     // Only write the tiles image if it was changed.
     // Porymap will only ever change an existing tiles image by importing a new one.
@@ -680,6 +687,9 @@ bool Tileset::load() {
     if (!loadTilesImage()) success = false;
     if (!loadMetatiles()) success = false;
     if (!loadMetatileAttributes()) success = false;
+    // Whatever was edited in memory has just been replaced by what's on disk.
+    m_hasUnsavedTilesImage = false;
+    m_hasUnsavedChanges = false;
     return success;
 }
 
@@ -690,6 +700,7 @@ bool Tileset::save() {
     if (!saveTilesImage()) success = false;
     if (!saveMetatiles()) success = false;
     if (!saveMetatileAttributes()) success = false;
+    if (success) m_hasUnsavedChanges = false;
     return success;
 }
 

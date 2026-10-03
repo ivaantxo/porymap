@@ -39,6 +39,7 @@ enum CommandId {
     ID_MapConnectionChangeMap,
     ID_MapConnectionAdd,
     ID_MapConnectionRemove,
+    ID_StampPiece,
 };
 
 #define IDMask_EventType_Object  (1 << 8)
@@ -75,6 +76,23 @@ private:
     Blockdata oldMetatiles;
 
     unsigned actionId;
+};
+
+
+
+/// Implements a command to commit stamping a piece of free art onto the map.
+/// Only the blocks are undone: the colors, tiles and metatiles the piece added
+/// stay in the tileset, so redo always finds them (Optimize clears what's unused).
+class StampPiece : public PaintMetatile {
+public:
+    StampPiece(Layout *layout,
+        const Blockdata &oldMetatiles, const Blockdata &newMetatiles,
+        unsigned actionId, QUndoCommand *parent = nullptr)
+    : PaintMetatile(layout, oldMetatiles, newMetatiles, actionId, parent) {
+        setText("Estampar pieza");
+    }
+
+    int id() const override { return CommandId::ID_StampPiece; }
 };
 
 

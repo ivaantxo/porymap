@@ -441,6 +441,7 @@ public:
         this->recentMapOrLayout = QString();
         this->useEncounterJson = true;
         this->customScripts.clear();
+        this->stampPieces.clear();
         this->readKeys.clear();
     }
 
@@ -453,6 +454,7 @@ public:
 
     QString recentMapOrLayout;
     bool useEncounterJson;
+    QStringList stampPieces; // Images in the piece library, relative to the project if inside it
 
 protected:
     virtual void parseConfigKeyValue(QString key, QString value) override;

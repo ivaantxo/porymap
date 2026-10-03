@@ -695,6 +695,7 @@ void LayoutPixmapItem::draw(bool ignoreCache) {
 }
 
 void LayoutPixmapItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event) {
+    emit this->hoverPixelMoved(event->pos());
     QPoint pos = Metatile::coordFromPixmapCoord(event->pos());
     if (pos != this->metatilePos) {
         this->metatilePos = pos;
@@ -706,6 +707,7 @@ void LayoutPixmapItem::hoverEnterEvent(QGraphicsSceneHoverEvent *event) {
     this->has_mouse = true;
     this->metatilePos = Metatile::coordFromPixmapCoord(event->pos());
     emit this->hoverEntered(this->metatilePos);
+    emit this->hoverPixelMoved(event->pos());
 }
 
 void LayoutPixmapItem::hoverLeaveEvent(QGraphicsSceneHoverEvent *) {
@@ -723,8 +725,11 @@ void LayoutPixmapItem::mousePressEvent(QGraphicsSceneMouseEvent *event) {
 
 void LayoutPixmapItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event) {
     QPoint pos = Metatile::coordFromPixmapCoord(event->pos());
-    if (pos == this->metatilePos)
+    if (pos == this->metatilePos) {
+        if (this->trackPixelMoves)
+            emit mouseEvent(event, this);
         return;
+    }
 
     this->metatilePos = pos;
     emit hoverChanged(pos);
