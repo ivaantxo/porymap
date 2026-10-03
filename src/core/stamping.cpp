@@ -2,6 +2,7 @@
 #include "project.h"
 #include "config.h"
 #include "log.h"
+#include "prefab.h"
 
 #include <QDir>
 #include <QFile>
@@ -195,9 +196,22 @@ std::vector<int> fixedTiles(const Tileset *tileset) {
 
 std::vector<mapeado::Fijado> pinnedMetatiles(const Tileset *tileset) {
     std::vector<mapeado::Fijado> pinned;
+    QSet<int> seen;
     for (auto it = tileset->metatileLabels.constBegin(); it != tileset->metatileLabels.constEnd(); it++) {
-        if (!it.value().isEmpty())
+        if (!it.value().isEmpty()) {
             pinned.push_back(mapeado::Fijado{it.value().toStdString(), it.key()});
+            seen.insert(it.key());
+        }
+    }
+    // Smart paths painted with metatiles go by their numbers: a prefab keeps all of its
+    // metatiles, used on a map or not, in their place.
+    const QMap<uint16_t, QString> prefabMetatiles = prefab.metatilesInTileset(tileset);
+    for (auto it = prefabMetatiles.constBegin(); it != prefabMetatiles.constEnd(); it++) {
+        int metatile = Metatile::getIndexInTileset(it.key());
+        if (!seen.contains(metatile)) {
+            pinned.push_back(mapeado::Fijado{QString("del prefab %1").arg(it.value()).toStdString(), metatile});
+            seen.insert(metatile);
+        }
     }
     return pinned;
 }

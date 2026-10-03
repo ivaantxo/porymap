@@ -77,6 +77,9 @@ public:
     void floodFillSmartPath(int initialX, int initialY, bool fromScriptCall = false);
 
     static bool isSmartPathSize(const QSize &size) { return size.width() == smartPathWidth && size.height() == smartPathHeight; }
+    // Which of the 3x3 smart path tiles goes in a cell, given which of its neighbors are part
+    // of the path (1 = top, 2 = right, 4 = bottom, 8 = left).
+    static int smartPathTileIndex(int neighbors) { return smartPathTable.value(neighbors, smartPathMiddleIndex); }
 
     virtual void pick(QGraphicsSceneMouseEvent*);
     virtual void select(QGraphicsSceneMouseEvent*);

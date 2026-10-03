@@ -18,6 +18,7 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsView>
 #include <QGroupBox>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
@@ -95,6 +96,7 @@ PieceStamper::PieceStamper(Editor *editor, QWidget *parent) : QWidget(parent), e
     layout->addWidget(this->sheetView, 1);
 
     this->label_Piece = new QLabel(this);
+    this->label_Piece->setWordWrap(true);
     layout->addWidget(this->label_Piece);
 
     // Where and how to stamp
@@ -293,10 +295,24 @@ void PieceStamper::updatePiece() {
     QRect rect = this->sheetItem->selectedRect().intersected(this->sheetImage.rect());
     this->pieceImage = this->sheetImage.copy(rect);
     this->piece = Stamping::pieceFromImage(this->pieceImage);
-    this->label_Piece->setText(QString("Pieza: %1 desde (%2, %3)")
-                               .arg(pieceSizeText(rect.size())).arg(rect.x()).arg(rect.y()));
+    QString text = QString("Pieza: %1 desde (%2, %3)").arg(pieceSizeText(rect.size())).arg(rect.x()).arg(rect.y());
+
+    const int w = Metatile::pixelWidth(), h = Metatile::pixelHeight();
+    if (this->pieceImage.size() == QSize(3 * w, 3 * h)) {
+        for (int k = 0; k < 9; k++)
+            this->smartPathPieces[k] = Stamping::pieceFromImage(this->pieceImage.copy((k % 3) * w, (k / 3) * h, w, h));
+        QImage open = this->pieceImage.copy(w, h, w, h);
+        this->smartPathPreview = QImage(2 * w, 2 * h, QImage::Format_ARGB32);
+        this->smartPathPreview.fill(Qt::transparent);
+        QPainter painter(&this->smartPathPreview);
+        for (int i = 0; i < 4; i++)
+            painter.drawImage((i % 2) * w, (i / 2) * h, open);
+        painter.end();
+        text += " · también camino inteligente (Smart Paths o Mayús)";
+    }
+    this->label_Piece->setText(text);
     if (this->preview)
-        this->preview->setPixmap(QPixmap::fromImage(this->pieceImage));
+        this->preview->setPixmap(QPixmap::fromImage(this->previewIsSmartPath ? this->smartPathPreview : this->pieceImage));
 }
 
 QPoint PieceStamper::snapToGrid(const QPointF &pos) const {
@@ -312,6 +328,14 @@ QPoint PieceStamper::strokePos(const QPointF &pos) const {
     return this->strokeOrigin + QPoint(dx * w, dy * h);
 }
 
+bool PieceStamper::isSmartPathMode(Qt::KeyboardModifiers modifiers) const {
+    // Same rule as porymap's smart paths: the toolbar checkbox, and Shift flips it.
+    if (this->pieceImage.size() != QSize(3 * Metatile::pixelWidth(), 3 * Metatile::pixelHeight()))
+        return false;
+    bool shift = modifiers & Qt::ShiftModifier;
+    return this->editor->settings->smartPathsEnabled != shift;
+}
+
 void PieceStamper::mapMouseEvent(QGraphicsSceneMouseEvent *event, LayoutPixmapItem *item) {
     if (event->type() == QEvent::GraphicsSceneMousePress) {
         if (!(event->buttons() & Qt::LeftButton))
@@ -319,33 +343,55 @@ void PieceStamper::mapMouseEvent(QGraphicsSceneMouseEvent *event, LayoutPixmapIt
         this->actionId++;
         this->stroking = true;
         this->strokeFailed = false;
-        this->strokeOrigin = snapToGrid(event->pos());
-        // Report moves inside a metatile too, the grid is finer than that.
-        item->trackPixelMoves = true;
-        updatePreview(this->strokeOrigin);
-        stampAt(this->strokeOrigin);
+        this->strokeSmartPath = isSmartPathMode(event->modifiers());
+        if (this->strokeSmartPath) {
+            QPoint cell = Metatile::coordFromPixmapCoord(event->pos());
+            updatePreview(QPoint(cell.x() * Metatile::pixelWidth(), cell.y() * Metatile::pixelHeight()), true);
+            stampSmartPathAt(cell);
+        } else {
+            this->strokeOrigin = snapToGrid(event->pos());
+            // Report moves inside a metatile too, the grid is finer than that.
+            item->trackPixelMoves = true;
+            updatePreview(this->strokeOrigin, false);
+            stampAt(this->strokeOrigin);
+        }
     } else if (event->type() == QEvent::GraphicsSceneMouseMove) {
         if (!this->stroking || this->strokeFailed)
             return;
-        QPoint pos = strokePos(event->pos());
-        updatePreview(pos);
-        if (pos != this->lastStampPos)
-            stampAt(pos);
+        if (this->strokeSmartPath) {
+            QPoint cell = Metatile::coordFromPixmapCoord(event->pos());
+            updatePreview(QPoint(cell.x() * Metatile::pixelWidth(), cell.y() * Metatile::pixelHeight()), true);
+            if (cell != this->lastStampPos)
+                stampSmartPathAt(cell);
+        } else {
+            QPoint pos = strokePos(event->pos());
+            updatePreview(pos, false);
+            if (pos != this->lastStampPos)
+                stampAt(pos);
+        }
     } else if (event->type() == QEvent::GraphicsSceneMouseRelease) {
         this->stroking = false;
         item->trackPixelMoves = false;
     }
 }
 
-bool PieceStamper::stampAt(const QPoint &pos) {
-    this->lastStampPos = pos;
-    Layout *layout = this->editor->layout;
-    Tileset *tileset = layout ? layout->tileset_primary : nullptr;
-    if (!tileset || this->pieceImage.isNull())
-        return false;
+// One stamping operation: the tileset and its maps as the library sees them, changed by
+// one or more stamps, and applied to porymap only if all of them fit.
+struct PieceStamper::StampJob {
+    Layout *layout = nullptr;
+    Tileset *tileset = nullptr;
+    mapeado::Formato format;
+    mapeado::Tileset data;
+    Stamping::TilesetMaps maps;
+    int target = -1;
+    std::vector<int> fixedTiles;
+    mapeado::Estampado total;
+};
 
-    // Nothing to do if it falls completely outside the map.
-    if (!QRect(pos, this->pieceImage.size()).intersects(QRect(QPoint(0, 0), layout->pixelSize())))
+bool PieceStamper::beginStamp(StampJob *job) {
+    job->layout = this->editor->layout;
+    job->tileset = job->layout ? job->layout->tileset_primary : nullptr;
+    if (!job->tileset)
         return false;
 
     if (this->canEditTileset && !this->canEditTileset()) {
@@ -353,35 +399,62 @@ bool PieceStamper::stampAt(const QPoint &pos) {
         return false;
     }
 
-    Stamping::TilesetMaps maps;
     QString error;
-    if (!Stamping::collectMaps(this->editor->project, tileset, &maps, &error)) {
+    if (!Stamping::collectMaps(this->editor->project, job->tileset, &job->maps, &error)) {
         this->strokeFailed = true;
         setStatus(error);
         return false;
     }
-    int target = maps.indexOf(layout);
-    if (target < 0)
+    job->target = job->maps.indexOf(job->layout);
+    if (job->target < 0)
         return false;
 
-    mapeado::Tileset data = Stamping::fromTileset(tileset);
+    job->format = Stamping::format();
+    job->data = Stamping::fromTileset(job->tileset);
+    job->fixedTiles = Stamping::fixedTiles(job->tileset);
+    return true;
+}
+
+bool PieceStamper::addStamp(StampJob &job, const mapeado::Imagen &piece, const QPoint &pos, bool replace) {
+    if (job.total.resultado != mapeado::ESTAMPADO)
+        return false;
     auto layer = static_cast<mapeado::Capa>(this->layerGroup->checkedId());
-    mapeado::Estampado result = mapeado::Estampar(Stamping::format(), data, maps.maps, target, this->piece,
-                                                  pos.x(), pos.y(), layer, this->checkBox_Replace->isChecked(),
-                                                  Stamping::fixedTiles(tileset));
+    mapeado::Estampado result = mapeado::Estampar(job.format, job.data, job.maps.maps, job.target, piece,
+                                                  pos.x(), pos.y(), layer, replace, job.fixedTiles);
+    if (result.resultado != mapeado::ESTAMPADO) {
+        job.total.resultado = result.resultado;
+        job.total.mensaje = result.mensaje;
+        return false;
+    }
+    job.total.metatilesNuevos += result.metatilesNuevos;
+    job.total.tilesNuevos += result.tilesNuevos;
+    job.total.coloresNuevos += result.coloresNuevos;
+    return true;
+}
+
+bool PieceStamper::finishStamp(StampJob &job, const std::function<void()> &retry) {
+    const mapeado::Estampado result = job.total;
     if (result.resultado != mapeado::ESTAMPADO) {
         this->strokeFailed = true;
         setStatus("No cabe: " + QString::fromStdString(result.mensaje) + ".");
         // After the mouse event is done, so the dialog doesn't swallow the release.
-        QTimer::singleShot(0, this, [this, result, pos] { showStampFailure(result, pos); });
+        QTimer::singleShot(0, this, [this, result, retry] { showStampFailure(result, retry); });
         return false;
     }
-    if (result.casillas == 0)
+
+    Layout *layout = job.layout;
+    Blockdata oldBlocks = layout->blockdata;
+    Blockdata newBlocks = Stamping::toBlockdata(job.maps.maps[job.target].bloques);
+    int changed = 0;
+    for (int i = 0; i < oldBlocks.size() && i < newBlocks.size(); i++) {
+        if (oldBlocks.at(i) != newBlocks.at(i))
+            changed++;
+    }
+    if (changed == 0)
         return true;
 
-    bool tilesetChanged = Stamping::applyToTileset(data, tileset);
-    Blockdata oldBlocks = layout->blockdata;
-    layout->editHistory.push(new StampPiece(layout, oldBlocks, Stamping::toBlockdata(maps.maps[target].bloques), this->actionId));
+    bool tilesetChanged = Stamping::applyToTileset(job.data, job.tileset);
+    layout->editHistory.push(new StampPiece(layout, oldBlocks, newBlocks, this->actionId));
     if (tilesetChanged) {
         if (this->editor->metatile_selector_item)
             this->editor->metatile_selector_item->refresh();
@@ -390,12 +463,92 @@ bool PieceStamper::stampAt(const QPoint &pos) {
     }
     updateUsage();
     setStatus(QString("Estampada en %1 casilla%2: %3 metatiles, %4 tiles y %5 colores nuevos.")
-              .arg(result.casillas).arg(result.casillas == 1 ? "" : "s")
+              .arg(changed).arg(changed == 1 ? "" : "s")
               .arg(result.metatilesNuevos).arg(result.tilesNuevos).arg(result.coloresNuevos));
     return true;
 }
 
-void PieceStamper::showStampFailure(const mapeado::Estampado &result, const QPoint &pos) {
+bool PieceStamper::stampAt(const QPoint &pos) {
+    this->lastStampPos = pos;
+    Layout *layout = this->editor->layout;
+    if (!layout || this->pieceImage.isNull())
+        return false;
+
+    // Nothing to do if it falls completely outside the map.
+    if (!QRect(pos, this->pieceImage.size()).intersects(QRect(QPoint(0, 0), layout->pixelSize())))
+        return false;
+
+    StampJob job;
+    if (!beginStamp(&job))
+        return false;
+    addStamp(job, this->piece, pos, this->checkBox_Replace->isChecked());
+    return finishStamp(job, [this, pos] { stampAt(pos); });
+}
+
+// A cell is part of the smart path if its art on the stamping layer is one of the 3x3
+// pieces. Porymap's own smart paths go by metatile numbers instead; going by the art,
+// what's under the path doesn't matter, and optimizing the tileset can't break it.
+bool PieceStamper::isSmartPathCell(const StampJob &job, const QPoint &cell) const {
+    const mapeado::MapaDelTileset &map = job.maps.maps[job.target];
+    if (cell.x() < 0 || cell.y() < 0 || cell.x() >= map.ancho || cell.y() >= map.alto)
+        return false;
+    int metatile = map.bloques[cell.y() * map.ancho + cell.x()] & job.format.mascaraId;
+    if (metatile >= static_cast<int>(job.data.metatiles.size()))
+        return false;
+
+    mapeado::Imagen layers[mapeado::NUM_CAPAS];
+    for (auto &layer : layers)
+        layer = mapeado::Imagen(Metatile::pixelWidth(), Metatile::pixelHeight());
+    mapeado::PintarMetatile(job.data, metatile, layers, 0, 0);
+    const std::vector<mapeado::Color> &art = layers[this->layerGroup->checkedId()].px;
+    for (const mapeado::Imagen &piece : this->smartPathPieces) {
+        if (piece.px == art)
+            return true;
+    }
+    return false;
+}
+
+// Like porymap's smart paths (LayoutPixmapItem::paintSmartPath): a 2x2 block of the open
+// piece, and then the cells around it that are part of the path get the piece that
+// matches their neighbors. The pieces replace whatever was on that layer.
+bool PieceStamper::stampSmartPathAt(const QPoint &cell) {
+    this->lastStampPos = cell;
+    Layout *layout = this->editor->layout;
+    if (!layout || this->pieceImage.isNull())
+        return false;
+    if (!layout->isWithinBounds(cell) && !layout->isWithinBounds(cell + QPoint(1, 1)))
+        return false;
+
+    StampJob job;
+    if (!beginStamp(&job))
+        return false;
+
+    auto pixelPos = [](const QPoint &c) { return QPoint(c.x() * Metatile::pixelWidth(), c.y() * Metatile::pixelHeight()); };
+    for (int j = 0; j <= 1; j++)
+    for (int i = 0; i <= 1; i++) {
+        QPoint c = cell + QPoint(i, j);
+        if (layout->isWithinBounds(c))
+            addStamp(job, this->smartPathPieces[4], pixelPos(c), true);
+    }
+    for (int j = -1; j <= 2; j++)
+    for (int i = -1; i <= 2; i++) {
+        // The corners can't be affected.
+        if ((i == -1 || i == 2) && (j == -1 || j == 2))
+            continue;
+        QPoint c = cell + QPoint(i, j);
+        if (job.total.resultado != mapeado::ESTAMPADO || !isSmartPathCell(job, c))
+            continue;
+        int neighbors = 0;
+        if (isSmartPathCell(job, c + QPoint(0, -1))) neighbors += 1;
+        if (isSmartPathCell(job, c + QPoint(1, 0)))  neighbors += 2;
+        if (isSmartPathCell(job, c + QPoint(0, 1)))  neighbors += 4;
+        if (isSmartPathCell(job, c + QPoint(-1, 0))) neighbors += 8;
+        addStamp(job, this->smartPathPieces[LayoutPixmapItem::smartPathTileIndex(neighbors)], pixelPos(c), true);
+    }
+    return finishStamp(job, [this, cell] { stampSmartPathAt(cell); });
+}
+
+void PieceStamper::showStampFailure(const mapeado::Estampado &result, const std::function<void()> &retry) {
     bool optimizable = result.resultado == mapeado::SIN_HUECO_TILES
                     || result.resultado == mapeado::SIN_HUECO_PALETAS
                     || result.resultado == mapeado::SIN_HUECO_METATILES;
@@ -410,7 +563,7 @@ void PieceStamper::showStampFailure(const mapeado::Estampado &result, const QPoi
     msgBox.exec();
     if (optimizeButton && msgBox.clickedButton() == optimizeButton && optimize()) {
         this->actionId++;
-        stampAt(pos);
+        retry();
     }
 }
 
@@ -440,7 +593,8 @@ bool PieceStamper::optimize() {
 
     Message question(QMessageBox::Question, QString("¿Optimizar %1?").arg(tileset->name), QMessageBox::NoButton, this);
     question.setInformativeText(QString("Se reempaqueta desde lo pintado en los mapas que lo usan (%1): se juntan los metatiles "
-                                        "repetidos, se quitan los que no usa nadie y se liberan los tiles y colores que sobran.\n\n"
+                                        "repetidos, se quitan los que no usa nadie y se liberan los tiles y colores que sobran. "
+                                        "Los metatiles con nombre y los de los prefabs se quedan siempre en su sitio.\n\n"
                                         "Se guardan el tileset y esos mapas, con lo que tuvieran sin guardar, "
                                         "y su historial de deshacer se vacía.")
                                 .arg(names.join(", ")));
@@ -528,7 +682,7 @@ void PieceStamper::setStatus(const QString &text) {
     this->label_Status->setText(text);
 }
 
-void PieceStamper::updatePreview(const QPoint &pos) {
+void PieceStamper::updatePreview(const QPoint &pos, bool smartPath) {
     LayoutPixmapItem *mapItem = this->editor->map_item;
     if (!mapItem || this->pieceImage.isNull()) {
         hidePreview();
@@ -538,10 +692,15 @@ void PieceStamper::updatePreview(const QPoint &pos) {
         // A new map item: the old preview went away with the old one, if it's gone.
         if (this->previewParent && this->preview)
             delete this->preview;
-        this->preview = new QGraphicsPixmapItem(QPixmap::fromImage(this->pieceImage), mapItem);
+        this->preview = new QGraphicsPixmapItem(mapItem);
         this->preview->setOpacity(0.6);
         this->preview->setAcceptedMouseButtons(Qt::NoButton);
         this->previewParent = mapItem;
+        this->previewIsSmartPath = !smartPath; // Forces setting the pixmap below
+    }
+    if (this->previewIsSmartPath != smartPath || this->preview->pixmap().isNull()) {
+        this->previewIsSmartPath = smartPath;
+        this->preview->setPixmap(QPixmap::fromImage(smartPath ? this->smartPathPreview : this->pieceImage));
     }
     this->preview->setPos(pos);
     this->preview->show();
@@ -557,7 +716,12 @@ void PieceStamper::mapHoverMoved(const QPointF &pos) {
         hidePreview();
         return;
     }
-    updatePreview(snapToGrid(pos));
+    if (isSmartPathMode(QGuiApplication::keyboardModifiers())) {
+        QPoint cell = Metatile::coordFromPixmapCoord(pos);
+        updatePreview(QPoint(cell.x() * Metatile::pixelWidth(), cell.y() * Metatile::pixelHeight()), true);
+    } else {
+        updatePreview(snapToGrid(pos), false);
+    }
 }
 
 void PieceStamper::mapHoverCleared() {

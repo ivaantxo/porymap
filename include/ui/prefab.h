@@ -26,6 +26,8 @@ public:
     void updatePrefabUi(QPointer<Layout> layout);
     void clearPrefabUi();
     bool tryImportDefaultPrefabs(QWidget * parent, BaseGameVersion version, QString filepath = "");
+    // Metatiles of 'tileset' that some prefab uses, and the name of one such prefab.
+    QMap<uint16_t, QString> metatilesInTileset(const Tileset *tileset) const;
 
 private:
     QPointer<MetatileSelector> selector;

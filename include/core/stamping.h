@@ -35,7 +35,8 @@ bool applyToTileset(const mapeado::Tileset &data, Tileset *tileset);
 // Tiles listed in tiles_fijos.txt next to tiles.png (numbers or a-b ranges, # comments),
 // which are never reused (animations).
 std::vector<int> fixedTiles(const Tileset *tileset);
-// Metatiles with a label, which code may use even if no map does.
+// Metatiles with a label, which code may use even if no map does, and metatiles used by
+// prefabs (smart paths go by metatile numbers).
 std::vector<mapeado::Fijado> pinnedMetatiles(const Tileset *tileset);
 
 std::vector<uint16_t> fromBlockdata(const Blockdata &blockdata);

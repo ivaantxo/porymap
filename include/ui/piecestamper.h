@@ -90,10 +90,17 @@ private:
     QGraphicsPixmapItem *preview = nullptr;
     QPointer<LayoutPixmapItem> previewParent;
 
+    // A 48x48 piece is also a smart path: its 3x3 cells, in the same order as a 3x3
+    // smart path selection of metatiles.
+    mapeado::Imagen smartPathPieces[9];
+    QImage smartPathPreview; // The open (middle) cell, 2x2, which is what each step paints
+    bool previewIsSmartPath = false;
+
     unsigned actionId = 0;
     QPoint strokeOrigin;
-    QPoint lastStampPos;
+    QPoint lastStampPos; // In pixels, or in cells for smart paths
     bool stroking = false;
+    bool strokeSmartPath = false;
     bool strokeFailed = false;
 
     void importPieces();
@@ -105,14 +112,22 @@ private:
 
     QPoint snapToGrid(const QPointF &pos) const;
     QPoint strokePos(const QPointF &pos) const;
+    bool isSmartPathMode(Qt::KeyboardModifiers modifiers) const;
     bool stampAt(const QPoint &pos);
-    void showStampFailure(const mapeado::Estampado &result, const QPoint &pos);
+    bool stampSmartPathAt(const QPoint &cell);
+
+    struct StampJob;
+    bool beginStamp(StampJob *job);
+    bool addStamp(StampJob &job, const mapeado::Imagen &piece, const QPoint &pos, bool replace);
+    bool isSmartPathCell(const StampJob &job, const QPoint &cell) const;
+    bool finishStamp(StampJob &job, const std::function<void()> &retry);
+    void showStampFailure(const mapeado::Estampado &result, const std::function<void()> &retry);
     bool optimize();
 
     void applyLayerVisibility();
     void updateUsage();
     void setStatus(const QString &text);
-    void updatePreview(const QPoint &pos);
+    void updatePreview(const QPoint &pos, bool smartPath);
     void hidePreview();
 };
 

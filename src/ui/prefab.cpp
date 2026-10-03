@@ -159,6 +159,22 @@ QList<PrefabItem> Prefab::getPrefabsForTilesets(QString primaryTileset, QString 
     return filteredPrefabs;
 }
 
+QMap<uint16_t, QString> Prefab::metatilesInTileset(const Tileset *tileset) const {
+    QMap<uint16_t, QString> metatiles;
+    if (!tileset)
+        return metatiles;
+    for (const auto &item : this->items) {
+        const QString &owner = tileset->is_secondary ? item.secondaryTileset : item.primaryTileset;
+        if (owner != tileset->name)
+            continue;
+        for (const auto &metatileItem : item.selection.metatileItems) {
+            if (metatileItem.enabled && tileset->containsMetatileId(metatileItem.metatileId) && !metatiles.contains(metatileItem.metatileId))
+                metatiles.insert(metatileItem.metatileId, item.name);
+        }
+    }
+    return metatiles;
+}
+
 void Prefab::initPrefabUI(QPointer<MetatileSelector> selector, QPointer<QWidget> prefabWidget, QPointer<QLabel> emptyPrefabLabel, Layout* layout) {
     this->selector = selector;
     this->prefabWidget = prefabWidget;

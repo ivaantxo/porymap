@@ -24,6 +24,14 @@ Este fork añade la pestaña **Piezas**, junto a Metatiles, Collision y Prefabs,
 - **Capas que se ven:** oculta capas mientras la pestaña está abierta.
 - **Guardar y deshacer:** el tileset se guarda con el mapa. Estampar se deshace con Ctrl+Z; optimizar no, porque guarda el tileset y sus mapas y vacía su historial.
 
+### Camino inteligente con piezas
+
+Una pieza de 48×48 (3×3 casillas, en el mismo orden que una selección de camino inteligente de metatiles) también es un camino inteligente. Con *Smart Paths* marcado en la barra, o con Mayús, el lápiz pinta como el camino inteligente de porymap: un bloque de 2×2 con la casilla del centro, y las casillas de alrededor que son camino cogen la pieza que les toca según sus vecinas. La pieza sustituye lo que hubiera en la capa elegida.
+
+Una casilla es camino si su arte en esa capa es uno de los 9 trozos, así que no depende de los números de metatile: da igual lo que haya debajo, y optimizar no lo rompe.
+
+El camino inteligente de siempre, con metatiles, sigue yendo por números. Para que optimizar no lo estropee, los metatiles de los prefabs (y los que tienen nombre) se quedan siempre en su sitio: guarda cada juego de camino como un prefab de 3×3.
+
 ### Un solo tileset por layout
 
 Si el `fieldmap.h` del proyecto define `NUM_TILESETS_PER_LAYOUT` como 1, porymap trabaja con un solo tileset por layout:
