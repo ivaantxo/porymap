@@ -905,6 +905,13 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
         pal[0] = TRANSPARENTE;
         ts.paletas.push_back(pal);
     }
+    // Sin ningun color en uso tambien queda una, vacia: el juego y porymap cuentan con ella.
+    if (ts.paletas.empty()) {
+        Paleta vacia;
+        vacia.fill(0);
+        vacia[0] = TRANSPARENTE;
+        ts.paletas.push_back(vacia);
+    }
     ts.metatiles.assign(totalMetatiles, Metatile());
     ts.atributos.assign(totalMetatiles, 0);
     for (int n = 0; n < totalMetatiles; n++) {
