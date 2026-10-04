@@ -56,6 +56,16 @@ Entonces porymap:
 - qué paletas carga cada mapa no se guarda: sale de sus metatiles cada vez, así que no se arrastran de un mapa a otro. El contador lo dice, y se pone en rojo si un mapa pasa del máximo pintando metatiles a mano;
 - guarda las paletas nuevas como `NN.pal`, quita las que sobren al optimizar y escribe `metatile_palettes.bin`. Un tileset nuevo se crea ya así.
 
+### Animaciones
+
+Si el tileset tiene `.animations` en `headers.h` (un `INCBIN_U32` de su `animations.bin`), la pestaña Piezas tiene **Animaciones del tileset**:
+
+- **Importar…** pide una carpeta con los fotogramas (`00.png`, `01.png`…, todos del mismo tamaño y con 15 colores como mucho entre todos), un nombre y cuántos fotogramas del juego dura cada uno. Reserva tiles libres seguidos y una paleta para ella. Con el nombre de una que ya existe, la cambia.
+- **Elegir una** la pone como pieza: su fotograma 0, mientras la vista de la pieza reproduce la animación. Al estamparlo, cada trozo igual a uno del fotograma 0 (también volteado) usa el tile animado, y en el juego se anima solo. Lo pintado antes de importarla con ese arte se anima al optimizar.
+- **Quitar** deja sus tiles con el fotograma 0, sin animar.
+
+Se guarda con el tileset. En el mapa, porymap enseña siempre el fotograma 0.
+
 El motor es la biblioteca de `tools/mapeado` de albor, copiada en `src/lib/mapeado`: los cambios van primero allí. Necesita metatiles de triple capa. Se compila como porymap ([INSTALL.md](INSTALL.md)); las descargas de abajo son del porymap original, sin las piezas.
 
 ## Download

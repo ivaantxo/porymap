@@ -37,9 +37,11 @@ std::string Hex(int n)
     return buf;
 }
 
-Tile Voltear(const Tile &t, bool h, bool v)
+// Vale para un Tile (indices) y para un TileColor (colores).
+template <typename T>
+T Voltear(const T &t, bool h, bool v)
 {
-    Tile r;
+    T r;
     for (int y = 0; y < 8; y++)
         for (int x = 0; x < 8; x++)
             r[y * 8 + x] = t[(v ? 7 - y : y) * 8 + (h ? 7 - x : x)];
@@ -89,6 +91,50 @@ TileColor TileDeArte(const Arte &a, int capa, int cuarto)
         for (int x = 0; x < 8; x++)
             t[y * 8 + x] = a[capa * PX_CAPA + (y0 + y) * LADO + x0 + x];
     return t;
+}
+
+// Los colores de un tile con una paleta; el indice 0 es transparente.
+TileColor ColoresDeTile(const Tile &t, const Tileset &ts, int paleta)
+{
+    TileColor r;
+    for (int i = 0; i < 64; i++)
+        r[i] = (t[i] == 0 || paleta >= (int)ts.paletas.size()) ? TRANSPARENTE : (Color)(ts.paletas[paleta][t[i]] & 0x7FFF);
+    return r;
+}
+
+// Un trozo de 8x8 de una animacion: cual, que tile de ella y con que volteo.
+struct RefAnimacion {
+    int animacion, posicion, volteo;
+};
+
+// Los trozos del fotograma 0 de las animaciones, en colores y con sus volteos: lo que
+// al pintar pasa a usar un tile animado. Si dos son iguales, gana el primero.
+std::map<TileColor, RefAnimacion> TrozosAnimados(const Tileset &ts)
+{
+    std::map<TileColor, RefAnimacion> r;
+    for (size_t a = 0; a < ts.animaciones.size(); a++) {
+        const Animacion &an = ts.animaciones[a];
+        if (an.fotogramas.empty())
+            continue;
+        for (size_t p = 0; p < an.fotogramas[0].size(); p++) {
+            TileColor c = ColoresDeTile(an.fotogramas[0][p], ts, an.paleta);
+            if (std::all_of(c.begin(), c.end(), [](Color px) { return px == TRANSPARENTE; }))
+                continue;
+            for (int v = 0; v < 4; v++)
+                r.insert(std::make_pair(Voltear(c, v & 1, v & 2), RefAnimacion{(int)a, (int)p, v}));
+        }
+    }
+    return r;
+}
+
+// Los tiles del tileset que son de alguna animacion.
+std::set<int> TilesAnimados(const Tileset &ts)
+{
+    std::set<int> r;
+    for (const Animacion &an : ts.animaciones)
+        for (int i = 0; i < an.ancho * an.alto; i++)
+            r.insert(an.tile + i);
+    return r;
 }
 
 // ---------------------------------------------------------------------------------
@@ -609,10 +655,15 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
     std::vector<TileColor> tilesColor;
     std::map<TileColor, int> indiceTile;
     std::vector<Colores> coloresTile;
-    // metatile -> 12 indices en tilesColor (-1 = transparente)
+    // metatile -> 12 indices en tilesColor (-1 = transparente, o de una animacion)
     std::vector<std::array<int, 12>> usoTiles(totalMetatiles);
+    // El arte igual a un trozo del fotograma 0 de una animacion usa su tile animado.
+    // metatile -> 12 veces animacion << 16 | posicion << 2 | volteo, o -1.
+    const std::map<TileColor, RefAnimacion> animados = TrozosAnimados(ant);
+    std::vector<std::array<int, 12>> usoAnim(totalMetatiles);
     for (int n = 0; n < totalMetatiles; n++) {
         usoTiles[n].fill(-1);
+        usoAnim[n].fill(-1);
         if (ocupante[n] < 0)
             continue;
         const Clave &k = claves[ocupante[n]];
@@ -625,6 +676,11 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
                         cs.insert(px);
                 if (cs.empty())
                     continue;
+                auto ia = animados.find(t);
+                if (ia != animados.end()) {
+                    usoAnim[n][c * 4 + q] = (ia->second.animacion << 16) | (ia->second.posicion << 2) | ia->second.volteo;
+                    continue;
+                }
                 if (cs.size() > 15) {
                     static const char *nombres[] = {"baja", "media", "alta"};
                     error = describe(primerSitio[k.arte]) + ", capa " + nombres[c] + ": un trozo de 8x8 tiene " +
@@ -643,13 +699,35 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
     }
 
     // --- Paletas ----------------------------------------------------------------------
-    // Cada combinacion de colores, en que mapas sale.
+    // Cada combinacion de colores, en que mapas sale. Los de una animacion, con todos sus
+    // fotogramas, son una sola: van en una paleta.
+    std::vector<Colores> coloresAnim(ant.animaciones.size());
+    for (size_t a = 0; a < ant.animaciones.size(); a++) {
+        const Animacion &an = ant.animaciones[a];
+        std::set<Color> cs;
+        for (const auto &fotograma : an.fotogramas)
+            for (const Tile &t : fotograma)
+                for (uint8_t i : t)
+                    if (i != 0 && an.paleta < (int)ant.paletas.size())
+                        cs.insert(ant.paletas[an.paleta][i] & 0x7FFF);
+        coloresAnim[a] = Colores(cs.begin(), cs.end());
+    }
     std::vector<Colores> conjuntos(coloresTile);
+    for (const Colores &c : coloresAnim)
+        if (!c.empty())
+            conjuntos.push_back(c);
     std::sort(conjuntos.begin(), conjuntos.end());
     conjuntos.erase(std::unique(conjuntos.begin(), conjuntos.end()), conjuntos.end());
+    auto indiceConjunto = [&](const Colores &c) {
+        return (int)(std::lower_bound(conjuntos.begin(), conjuntos.end(), c) - conjuntos.begin());
+    };
     std::vector<int> conjuntoTile(tilesColor.size());
     for (size_t i = 0; i < tilesColor.size(); i++)
-        conjuntoTile[i] = std::lower_bound(conjuntos.begin(), conjuntos.end(), coloresTile[i]) - conjuntos.begin();
+        conjuntoTile[i] = indiceConjunto(coloresTile[i]);
+    std::vector<int> conjuntoAnim(ant.animaciones.size(), -1);
+    for (size_t a = 0; a < ant.animaciones.size(); a++)
+        if (!coloresAnim[a].empty())
+            conjuntoAnim[a] = indiceConjunto(coloresAnim[a]);
     std::vector<std::vector<int>> mapasConjunto(conjuntos.size());
     for (size_t li = 0; li < e.layouts.size(); li++) {
         std::set<int> enMapa;
@@ -657,9 +735,12 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
             for (const Casilla &c : *lista) {
                 int pref;
                 int n = numero[clave(c, &pref)];
-                for (int q = 0; q < 12; q++)
+                for (int q = 0; q < 12; q++) {
                     if (usoTiles[n][q] >= 0)
                         enMapa.insert(conjuntoTile[usoTiles[n][q]]);
+                    else if (usoAnim[n][q] >= 0)
+                        enMapa.insert(conjuntoAnim[usoAnim[n][q] >> 16]);
+                }
             }
         for (int k : enMapa)
             mapasConjunto[k].push_back(li);
@@ -699,14 +780,16 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
     // --- Tiles en indices, con volteos ------------------------------------------------
     // Un tile que ya estaba (tal cual o volteado) vuelve a su sitio de antes. Los demas
     // van a los huecos cuando ya se sabe cuales quedan libres.
+    // Los tiles de las animaciones se quedan en su sitio y ningun otro va a ellos.
+    const std::set<int> animTiles = TilesAnimados(ant);
     std::set<int> fijos;
     for (int t : e.tilesFijos)
-        if (t > 0 && t < (int)ant.tiles.size())
+        if (t > 0 && t < (int)ant.tiles.size() && !animTiles.count(t))
             fijos.insert(t);
     // Datos de antes (y sus volteos) -> tile y volteo; gana el numero mas bajo.
     std::map<Tile, std::pair<int, int>> anteriores;
     for (int t = (int)ant.tiles.size() - 1; t >= 1; t--) {
-        if (e.compactar && !fijos.count(t))
+        if ((e.compactar && !fijos.count(t)) || animTiles.count(t))
             continue;
         for (int v = 3; v >= 0; v--)
             anteriores[Voltear(ant.tiles[t], v & 1, v & 2)] = std::make_pair(t, v);
@@ -733,6 +816,34 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
     };
     for (int t : fijos)
         coloca(t, ant.tiles[t]);
+
+    // Las animaciones, con los indices de su paleta de ahora; el fotograma 0 va a sus
+    // tiles, que no se juntan con ningun otro.
+    std::vector<Animacion> animaciones = ant.animaciones;
+    for (size_t a = 0; a < animaciones.size(); a++) {
+        Animacion &an = animaciones[a];
+        const Animacion &vieja = ant.animaciones[a];
+        an.paleta = conjuntoAnim[a] >= 0 ? reparto.paletaDe[conjuntoAnim[a]] : 0;
+        for (size_t fo = 0; fo < an.fotogramas.size(); fo++)
+            for (size_t p = 0; p < an.fotogramas[fo].size(); p++)
+                for (int i = 0; i < 64; i++) {
+                    int indice = vieja.fotogramas[fo][p][i];
+                    if (indice != 0 && vieja.paleta < (int)ant.paletas.size())
+                        indice = std::max(0, pals[an.paleta].Busca(ant.paletas[vieja.paleta][indice] & 0x7FFF, true));
+                    an.fotogramas[fo][p][i] = indice;
+                }
+        for (int p = 0; p < an.ancho * an.alto && !an.fotogramas.empty(); p++) {
+            int t = an.tile + p;
+            if (t >= (int)tiles.size()) {
+                Tile vacio;
+                vacio.fill(0);
+                tiles.resize(t + 1, vacio);
+                tileOcupado.resize(t + 1, false);
+            }
+            tiles[t] = an.fotogramas[0][p];
+            tileOcupado[t] = true;
+        }
+    }
 
     std::vector<int> paletaTile(tilesColor.size());
     std::vector<Tile> datosTile(tilesColor.size());
@@ -768,6 +879,7 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
     // --- Tileset ----------------------------------------------------------------------
     Tileset &ts = s.tileset;
     ts.tiles = tiles;
+    ts.animaciones = animaciones;
     for (size_t p = 0; p < pals.size(); p++) {
         Paleta pal = pals[p].color;
         pal[0] = TRANSPARENTE;
@@ -780,9 +892,15 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
         if (ocupante[n] < 0)
             continue;
         ts.atributos[n] = claves[ocupante[n]].atributos;
-        for (int q = 0; q < 12; q++)
-            if (usoTiles[n][q] >= 0)
+        for (int q = 0; q < 12; q++) {
+            if (usoTiles[n][q] >= 0) {
                 ts.metatiles[n][q] = entradaTile[usoTiles[n][q]];
+            } else if (usoAnim[n][q] >= 0) {
+                const Animacion &an = animaciones[usoAnim[n][q] >> 16];
+                int p = (usoAnim[n][q] >> 2) & 0x3FFF, v = usoAnim[n][q] & 3;
+                ts.metatiles[n][q] = (an.tile + p) | ((v & 1) << 10) | ((v >> 1) << 11) | ((uint32_t)an.paleta << 12);
+            }
+        }
     }
 
     // --- Blockdata --------------------------------------------------------------------
@@ -867,12 +985,13 @@ struct Relleno {
     int numCargadas = 0;
     int cargadasAntes = 0;                     // sin lo que mete la pieza
     std::vector<bool> tileUsado;
-    std::set<int> tilesFijos;
+    std::set<int> tilesFijos;                  // y los de las animaciones
     std::map<Tile, std::pair<int, int>> tiles; // datos (y volteos) -> tile y volteo
+    std::map<TileColor, RefAnimacion> animados;
     Estampado &r;
 
     Relleno(const Formato &formato, const Tileset &t, const std::vector<int> &fijos, Estampado &res)
-        : f(formato), ts(t), tilesFijos(fijos.begin(), fijos.end()), r(res)
+        : f(formato), ts(t), tilesFijos(fijos.begin(), fijos.end()), animados(TrozosAnimados(t)), r(res)
     {
         int numPaletas = std::min((int)ts.paletas.size(), f.maxPaletasTileset);
         pals.assign(numPaletas, EstadoPaleta());
@@ -895,9 +1014,20 @@ struct Relleno {
                             pals[p].usado[i] = true;
             }
         }
+        // Los colores de todos los fotogramas de las animaciones tambien estan en uso, y
+        // sus tiles no se usan para otra cosa.
+        for (const Animacion &an : ts.animaciones)
+            for (const auto &fotograma : an.fotogramas)
+                for (const Tile &tile : fotograma)
+                    for (uint8_t i : tile)
+                        if (i && an.paleta < numPaletas)
+                            pals[an.paleta].usado[i] = true;
+        const std::set<int> animTiles = TilesAnimados(ts);
+        tilesFijos.insert(animTiles.begin(), animTiles.end());
         for (int t = (int)ts.tiles.size() - 1; t >= 0; t--)
-            for (int v = 3; v >= 0; v--)
-                tiles[Voltear(ts.tiles[t], v & 1, v & 2)] = std::make_pair(t, v);
+            if (!animTiles.count(t))
+                for (int v = 3; v >= 0; v--)
+                    tiles[Voltear(ts.tiles[t], v & 1, v & 2)] = std::make_pair(t, v);
     }
 
     bool Falla(Resultado res, const std::string &mensaje)
@@ -1019,6 +1149,18 @@ struct Relleno {
                 cs.insert(px);
         if (cs.empty()) {
             *entrada = 0;
+            return true;
+        }
+        // Un trozo del fotograma 0 de una animacion usa su tile animado, con su paleta.
+        auto ia = animados.find(t);
+        if (ia != animados.end()) {
+            const Animacion &an = ts.animaciones[ia->second.animacion];
+            if (an.paleta < (int)cargada.size() && !cargada[an.paleta] && numCargadas >= f.maxPaletas)
+                return Falla(SIN_HUECO_PALETAS, "el mapa ya carga las " + std::to_string(f.maxPaletas) +
+                                                    " paletas que caben y la animacion " + an.nombre + " necesita la suya");
+            Carga(an.paleta);
+            int v = ia->second.volteo;
+            *entrada = (an.tile + ia->second.posicion) | ((v & 1) << 10) | ((v >> 1) << 11) | ((uint32_t)an.paleta << 12);
             return true;
         }
         if (cs.size() > 15)
@@ -1182,11 +1324,29 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
         uint16_t atributos = antes < numMetatiles ? rel.ts.atributos[antes] : 0;
 
         // Uno que ya tenga ese arte y cuyas paletas pueda cargar el mapa: el que menos
-        // haga cargar, y si puede ser con los atributos de la casilla.
+        // haga cargar, y si puede ser con los atributos de la casilla. Si el arte tiene
+        // trozos de una animacion, tiene que usar sus tiles (uno pintado antes de meter
+        // la animacion aun no los usa).
+        auto animado = [&](int m) {
+            for (int c = 0; c < NUM_CAPAS; c++)
+                for (int q = 0; q < 4; q++) {
+                    auto ia = rel.animados.find(TileDeArte(nuevo, c, q));
+                    if (ia == rel.animados.end())
+                        continue;
+                    const Animacion &an = rel.ts.animaciones[ia->second.animacion];
+                    uint32_t e = rel.ts.metatiles[m][c * 4 + q];
+                    int v = ia->second.volteo;
+                    if (TileDeEntrada(e) != an.tile + ia->second.posicion || ((e >> 10) & 3) != (uint32_t)v)
+                        return false;
+                }
+            return true;
+        };
         int destino = -1, mejorCargas = 0;
         auto it = porArte.find(nuevo);
         if (it != porArte.end()) {
             for (int m : it->second) {
+                if (!animado(m))
+                    continue;
                 int cargas = rel.SinCargar(paletasMetatile[m]);
                 if (rel.numCargadas + cargas > f.maxPaletas)
                     continue;
@@ -1234,6 +1394,248 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
     rel.Guarda(ts);
     mapa.bloques = bloques;
     return r;
+}
+
+Estampado Animar(const Formato &f, Tileset &ts, const std::vector<MapaDelTileset> &mapas, const std::string &nombre,
+                 const std::vector<Imagen> &fotogramas, int cada, const std::vector<int> &tilesFijos)
+{
+    Estampado r;
+    auto falla = [&](Resultado res, const std::string &mensaje) {
+        r.resultado = res;
+        r.mensaje = mensaje;
+        return r;
+    };
+    if (nombre.empty() || nombre.size() > 17)
+        return falla(PIEZA_NO_VALIDA, "el nombre de la animacion tiene que tener entre 1 y 17 letras");
+    if (fotogramas.empty())
+        return falla(PIEZA_NO_VALIDA, "la animacion no tiene fotogramas");
+    const int w = fotogramas[0].ancho, h = fotogramas[0].alto;
+    if (w <= 0 || h <= 0 || w % 8 || h % 8)
+        return falla(PIEZA_NO_VALIDA, "los fotogramas miden " + std::to_string(w) + "x" + std::to_string(h) +
+                                          " y tienen que ser multiplo de 8 en los dos lados");
+    for (size_t i = 1; i < fotogramas.size(); i++)
+        if (fotogramas[i].ancho != w || fotogramas[i].alto != h)
+            return falla(PIEZA_NO_VALIDA, "el fotograma " + std::to_string(i) + " mide " + std::to_string(fotogramas[i].ancho) +
+                                              "x" + std::to_string(fotogramas[i].alto) + " y el primero " + std::to_string(w) +
+                                              "x" + std::to_string(h));
+    if (fotogramas.size() > 0xFFFF || cada < 1 || cada > 0xFFFF)
+        return falla(PIEZA_NO_VALIDA, "una animacion tiene como mucho 65535 fotogramas, y cada uno dura de 1 a 65535");
+    const int ancho = w / 8, alto = h / 8, n = ancho * alto;
+
+    std::set<Color> cs;
+    for (const Imagen &im : fotogramas)
+        for (Color c : im.px)
+            if (c != TRANSPARENTE)
+                cs.insert(c);
+    if (cs.size() > 15)
+        return falla(DEMASIADOS_COLORES, "la animacion tiene " + std::to_string(cs.size()) +
+                                             " colores entre todos sus fotogramas y una paleta admite 15");
+    const Colores s(cs.begin(), cs.end());
+
+    // Si ya hay una con ese nombre, se cambia: se mira el tileset sin ella y sin el arte
+    // de sus tiles, que va a ser el nuevo.
+    Tileset sin = ts;
+    int existente = -1, tile = -1, paletaAntes = -1;
+    for (size_t a = 0; a < sin.animaciones.size(); a++)
+        if (sin.animaciones[a].nombre == nombre)
+            existente = a;
+    if (existente >= 0) {
+        const Animacion &vieja = sin.animaciones[existente];
+        if (vieja.ancho != ancho || vieja.alto != alto)
+            return falla(PIEZA_NO_VALIDA, "la animacion " + nombre + " mide " + std::to_string(vieja.ancho * 8) + "x" +
+                                              std::to_string(vieja.alto * 8) + " y los fotogramas nuevos " + std::to_string(w) +
+                                              "x" + std::to_string(h) + ": quitala antes o ponle otro nombre");
+        tile = vieja.tile;
+        paletaAntes = vieja.paleta;
+        for (int i = 0; i < n; i++)
+            if (tile + i < (int)sin.tiles.size())
+                sin.tiles[tile + i].fill(0);
+        sin.animaciones.erase(sin.animaciones.begin() + existente);
+    }
+    Relleno rel(f, sin, tilesFijos, r);
+
+    // La paleta: la de antes si caben sus colores; si no, una que ya los tenga todos,
+    // una para ella sola o, si no queda, la que tenga sitio.
+    int pal = -1;
+    if (paletaAntes >= 0 && paletaAntes < (int)rel.pals.size() && rel.pals[paletaAntes].Coste(s) <= rel.pals[paletaAntes].Libres())
+        pal = paletaAntes;
+    for (int p = 0; p < (int)rel.pals.size() && pal < 0; p++)
+        if (rel.pals[p].Tiene(s, true))
+            pal = p;
+    for (int p = 0; p < (int)rel.pals.size() && pal < 0; p++)
+        if (rel.pals[p].Vacia())
+            pal = p;
+    if (pal < 0 && (int)rel.pals.size() < f.maxPaletasTileset) {
+        pal = rel.pals.size();
+        rel.pals.push_back(EstadoPaleta());
+        Paleta vacia;
+        vacia.fill(0);
+        vacia[0] = TRANSPARENTE;
+        rel.ts.paletas.push_back(vacia);
+        rel.cargada.push_back(false);
+    }
+    if (pal < 0)
+        pal = rel.MasParecida(s, false, false);
+    if (pal < 0)
+        return falla(SIN_HUECO_PALETAS, "ninguna paleta del tileset tiene sitio para los " + std::to_string(s.size()) +
+                                            " colores de la animacion");
+    if (rel.pals[pal].Vacia() && !s.empty())
+        r.paletasNuevas++;
+    r.coloresNuevos += rel.pals[pal].Coste(s);
+    rel.pals[pal].Anade(s);
+
+    // Los tiles: los suyos si ya estaba; si no, los primeros libres seguidos.
+    if (tile < 0) {
+        auto libre = [&](int i) {
+            return i >= (int)rel.ts.tiles.size() ||
+                   (!rel.tileUsado[i] && !rel.tilesFijos.count(i) &&
+                    std::all_of(rel.ts.tiles[i].begin(), rel.ts.tiles[i].end(), [](uint8_t v) { return v == 0; }));
+        };
+        for (int t = 1; t + n <= f.maxTiles && tile < 0; t++) {
+            bool cabe = true;
+            for (int i = 0; i < n && cabe; i++)
+                cabe = libre(t + i);
+            if (cabe)
+                tile = t;
+        }
+        if (tile < 0)
+            return falla(SIN_HUECO_TILES, "no hay " + std::to_string(n) + " tiles libres seguidos para la animacion (caben " +
+                                              std::to_string(f.maxTiles) + ")");
+        r.tilesNuevos = n;
+    }
+    if (tile + n > (int)rel.ts.tiles.size()) {
+        Tile vacio;
+        vacio.fill(0);
+        rel.ts.tiles.resize(tile + n, vacio);
+    }
+
+    Animacion an;
+    an.nombre = nombre;
+    an.tile = tile;
+    an.ancho = ancho;
+    an.alto = alto;
+    an.paleta = pal;
+    an.cada = cada;
+    for (const Imagen &im : fotogramas) {
+        std::vector<Tile> fotograma(n);
+        for (int ty = 0; ty < alto; ty++)
+            for (int tx = 0; tx < ancho; tx++)
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++) {
+                        Color c = im.en(tx * 8 + x, ty * 8 + y);
+                        fotograma[ty * ancho + tx][y * 8 + x] = c == TRANSPARENTE ? 0 : rel.pals[pal].Busca(c, true);
+                    }
+        an.fotogramas.push_back(fotograma);
+    }
+    for (int i = 0; i < n; i++)
+        rel.ts.tiles[tile + i] = an.fotogramas[0][i];
+    if (existente >= 0)
+        rel.ts.animaciones.insert(rel.ts.animaciones.begin() + existente, an);
+    else
+        rel.ts.animaciones.push_back(an);
+
+    // Lo que ya usaba sus tiles pasa a su paleta, si ha cambiado; ningun mapa puede pasar
+    // de las que caben.
+    if (paletaAntes >= 0 && paletaAntes != pal)
+        for (Metatile &m : rel.ts.metatiles)
+            for (uint32_t &e : m)
+                if (TileDeEntrada(e) >= tile && TileDeEntrada(e) < tile + n)
+                    e = (e & 0xFFF) | ((uint32_t)pal << 12);
+    for (const MapaDelTileset &m : mapas) {
+        int cuantas = PaletasDelMapa(rel.ts, m.bloques, m.borde, f.mascaraId).size();
+        if (cuantas > f.maxPaletas)
+            return falla(SIN_HUECO_PALETAS, m.nombre + " pasaria a cargar " + std::to_string(cuantas) + " paletas y caben " +
+                                                std::to_string(f.maxPaletas));
+    }
+
+    rel.Guarda(ts);
+    return r;
+}
+
+namespace {
+
+const int kFichaAnimacion = 32;
+
+uint32_t LeerLE(const std::vector<uint8_t> &d, size_t i, int bytes)
+{
+    uint32_t v = 0;
+    for (int k = 0; k < bytes && i + k < d.size(); k++)
+        v |= (uint32_t)d[i + k] << (8 * k);
+    return v;
+}
+
+void PonerLE(std::vector<uint8_t> &d, size_t i, uint32_t v, int bytes)
+{
+    for (int k = 0; k < bytes; k++)
+        d[i + k] = (v >> (8 * k)) & 0xFF;
+}
+
+} // namespace
+
+std::vector<uint8_t> BytesDeAnimaciones(const std::vector<Animacion> &animaciones)
+{
+    std::vector<uint8_t> d((animaciones.size() + 1) * kFichaAnimacion, 0);
+    for (size_t a = 0; a < animaciones.size(); a++) {
+        const Animacion &an = animaciones[a];
+        size_t f = a * kFichaAnimacion;
+        PonerLE(d, f, an.tile, 2);
+        PonerLE(d, f + 2, an.ancho * an.alto, 2);
+        PonerLE(d, f + 4, an.fotogramas.size(), 2);
+        PonerLE(d, f + 6, an.cada, 2);
+        PonerLE(d, f + 8, d.size(), 4);
+        d[f + 12] = an.paleta;
+        d[f + 13] = an.ancho;
+        for (size_t i = 0; i < an.nombre.size() && i < 17; i++)
+            d[f + 14 + i] = an.nombre[i];
+        for (const auto &fotograma : an.fotogramas)
+            for (const Tile &t : fotograma)
+                for (int p = 0; p < 64; p += 2)
+                    d.push_back((t[p] & 0xF) | ((t[p + 1] & 0xF) << 4));
+    }
+    return d;
+}
+
+bool AnimacionesDeBytes(const std::vector<uint8_t> &d, std::vector<Animacion> &animaciones)
+{
+    animaciones.clear();
+    for (size_t f = 0; f + kFichaAnimacion <= d.size(); f += kFichaAnimacion) {
+        int tiles = LeerLE(d, f + 2, 2);
+        if (tiles == 0)
+            return true;
+        Animacion an;
+        an.tile = LeerLE(d, f, 2);
+        int fotogramas = LeerLE(d, f + 4, 2);
+        an.cada = LeerLE(d, f + 6, 2);
+        size_t desde = LeerLE(d, f + 8, 4);
+        an.paleta = d[f + 12];
+        an.ancho = d[f + 13];
+        for (int i = 0; i < 18 && d[f + 14 + i]; i++)
+            an.nombre += (char)d[f + 14 + i];
+        if (an.ancho == 0 || tiles % an.ancho || desde + (size_t)fotogramas * tiles * 32 > d.size())
+            return false;
+        an.alto = tiles / an.ancho;
+        for (int fo = 0; fo < fotogramas; fo++) {
+            std::vector<Tile> fotograma(tiles);
+            for (int t = 0; t < tiles; t++)
+                for (int p = 0; p < 64; p++) {
+                    uint8_t b = d[desde + ((size_t)fo * tiles + t) * 32 + p / 2];
+                    fotograma[t][p] = (p & 1) ? b >> 4 : b & 0xF;
+                }
+            an.fotogramas.push_back(fotograma);
+        }
+        animaciones.push_back(an);
+    }
+    return false; // sin la ficha a cero del final
+}
+
+bool QuitarAnimacion(Tileset &ts, const std::string &nombre)
+{
+    for (size_t a = 0; a < ts.animaciones.size(); a++)
+        if (ts.animaciones[a].nombre == nombre) {
+            ts.animaciones.erase(ts.animaciones.begin() + a);
+            return true;
+        }
+    return false;
 }
 
 bool Optimizar(const Formato &f, const Tileset &ts, const std::vector<MapaDelTileset> &mapas,

@@ -21,6 +21,7 @@ class QGraphicsSceneMouseEvent;
 class QGraphicsView;
 class QLabel;
 class QPushButton;
+class QTimer;
 
 // The image shown in the Pieces tab, zoomed in. A region of it is picked on the
 // 8x8 grid, and that region is the piece that gets stamped.
@@ -31,11 +32,13 @@ public:
 
     PieceSheetItem() : SelectablePixmapItem(Tile::pixelWidth() * zoom, Tile::pixelHeight() * zoom) {}
     void setImage(const QImage &image);
+    void setFrame(const QImage &image); // Same size, keeping the selection (an animation playing)
     QRect selectedRect() const; // In pixels of the image
     void draw() override;
 
 private:
     QPixmap basePixmap;
+    QPixmap makePixmap(const QImage &image) const;
 };
 
 // The Pieces tab, and the stamping tool that goes with it. With the tab open and the
@@ -72,6 +75,12 @@ private:
     QGraphicsView *sheetView;
     PieceSheetItem *sheetItem;
     QLabel *label_Piece;
+    QComboBox *comboBox_Animations;
+    QPushButton *button_ImportAnimation;
+    QPushButton *button_RemoveAnimation;
+    QTimer *animationTimer;
+    QList<QImage> animationFramesShown;
+    int animationFrame = 0;
     QButtonGroup *layerGroup;
     QCheckBox *checkBox_Replace;
     QComboBox *comboBox_Grid;
@@ -111,6 +120,13 @@ private:
     void loadPiece(int index);
     void updatePiece();
 
+    // The tileset's animations: playing in the sheet, frame 0 is the piece.
+    void refreshAnimations();
+    void loadAnimation(int index);
+    void stopAnimation();
+    void importAnimation();
+    void removeAnimation();
+
     QPoint snapToGrid(const QPointF &pos) const;
     QPoint strokePos(const QPointF &pos) const;
     bool isSmartPathMode(Qt::KeyboardModifiers modifiers) const;
@@ -122,6 +138,8 @@ private:
     bool addStamp(StampJob &job, const mapeado::Imagen &piece, const QPoint &pos, bool replace);
     bool isSmartPathCell(const StampJob &job, const QPoint &cell) const;
     bool finishStamp(StampJob &job, const std::function<void()> &retry);
+    // Changes the tileset outside a stroke (animations), the same way a stamp would.
+    bool editTileset(const std::function<mapeado::Estampado(StampJob &)> &edit, const QString &failure);
     void showStampFailure(const mapeado::Estampado &result, const std::function<void()> &retry);
     bool optimize();
 

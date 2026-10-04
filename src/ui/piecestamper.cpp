@@ -20,6 +20,7 @@
 #include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QPainter>
 #include <QPushButton>
@@ -40,7 +41,7 @@ QString pieceSizeText(const QSize &size) {
 
 } // namespace
 
-void PieceSheetItem::setImage(const QImage &image) {
+QPixmap PieceSheetItem::makePixmap(const QImage &image) const {
     QPixmap pixmap(image.width() * zoom, image.height() * zoom);
     QPainter painter(&pixmap);
     // Checkerboard behind the transparent parts, one square per 4x4 pixels.
@@ -50,10 +51,18 @@ void PieceSheetItem::setImage(const QImage &image) {
         painter.fillRect(x, y, square, square, ((x + y) / square) % 2 ? QColor(204, 204, 204) : QColor(255, 255, 255));
     painter.drawImage(pixmap.rect(), image);
     painter.end();
+    return pixmap;
+}
 
-    this->basePixmap = pixmap;
-    setPixmap(pixmap);
+void PieceSheetItem::setImage(const QImage &image) {
+    this->basePixmap = makePixmap(image);
+    setPixmap(this->basePixmap);
     select(QPoint(0, 0), QSize(cellsWide(), cellsTall()));
+}
+
+void PieceSheetItem::setFrame(const QImage &image) {
+    this->basePixmap = makePixmap(image);
+    draw();
 }
 
 QRect PieceSheetItem::selectedRect() const {
@@ -98,6 +107,24 @@ PieceStamper::PieceStamper(Editor *editor, QWidget *parent) : QWidget(parent), e
     this->label_Piece = new QLabel(this);
     this->label_Piece->setWordWrap(true);
     layout->addWidget(this->label_Piece);
+
+    // The tileset's animations
+    auto *animationsBox = new QGroupBox("Animaciones del tileset", this);
+    auto *animationsRow = new QHBoxLayout(animationsBox);
+    this->comboBox_Animations = new QComboBox(animationsBox);
+    this->comboBox_Animations->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    this->comboBox_Animations->setMinimumContentsLength(8);
+    this->comboBox_Animations->setToolTip("Elegir una la pone como pieza: su fotograma 0, que al estamparlo se anima solo en el juego.");
+    this->button_ImportAnimation = new QPushButton("Importar…", animationsBox);
+    this->button_ImportAnimation->setToolTip("Meter en el tileset una animación desde una carpeta con sus fotogramas (00.png, 01.png…), "
+                                             "o cambiar la que tenga el mismo nombre.");
+    this->button_RemoveAnimation = new QPushButton("Quitar", animationsBox);
+    this->button_RemoveAnimation->setToolTip("Quitar la animación del tileset: sus tiles se quedan con el fotograma 0, sin animar.");
+    animationsRow->addWidget(this->comboBox_Animations, 1);
+    animationsRow->addWidget(this->button_ImportAnimation);
+    animationsRow->addWidget(this->button_RemoveAnimation);
+    layout->addWidget(animationsBox);
+    this->animationTimer = new QTimer(this);
 
     // Where and how to stamp
     auto *layerBox = new QGroupBox("Capa donde se estampa", this);
@@ -161,6 +188,15 @@ PieceStamper::PieceStamper(Editor *editor, QWidget *parent) : QWidget(parent), e
     connect(this->comboBox_Pieces, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PieceStamper::loadPiece);
     connect(this->sheetItem, &SelectablePixmapItem::selectionChanged, this, &PieceStamper::updatePiece);
     connect(this->button_Optimize, &QPushButton::clicked, this, &PieceStamper::optimize);
+    connect(this->comboBox_Animations, QOverload<int>::of(&QComboBox::activated), this, &PieceStamper::loadAnimation);
+    connect(this->button_ImportAnimation, &QPushButton::clicked, this, &PieceStamper::importAnimation);
+    connect(this->button_RemoveAnimation, &QPushButton::clicked, this, &PieceStamper::removeAnimation);
+    connect(this->animationTimer, &QTimer::timeout, [this] {
+        if (this->animationFramesShown.isEmpty())
+            return;
+        this->animationFrame = (this->animationFrame + 1) % this->animationFramesShown.length();
+        this->sheetItem->setFrame(this->animationFramesShown.at(this->animationFrame));
+    });
 
     setStatus("Con el lápiz, haz clic en el mapa para estampar la pieza. Arrastrando se repite.");
 }
@@ -193,6 +229,7 @@ void PieceStamper::refresh() {
     if (!this->unsupportedReason.isEmpty())
         setStatus(this->unsupportedReason);
     hidePreview();
+    refreshAnimations();
     updateUsage();
 }
 
@@ -267,6 +304,7 @@ void PieceStamper::removePiece() {
 }
 
 void PieceStamper::loadPiece(int index) {
+    stopAnimation();
     this->sheetImage = QImage();
     if (index >= 0) {
         QString path = this->comboBox_Pieces->itemData(index, Qt::ToolTipRole).toString();
@@ -317,6 +355,165 @@ void PieceStamper::updatePiece() {
     this->label_Piece->setText(text);
     if (this->preview)
         this->preview->setPixmap(QPixmap::fromImage(this->previewIsSmartPath ? this->smartPathPreview : this->pieceImage));
+}
+
+struct PieceStamper::StampJob {
+    Layout *layout = nullptr;
+    Tileset *tileset = nullptr;
+    mapeado::Formato format;
+    mapeado::Tileset data;
+    Stamping::TilesetMaps maps;
+    int target = -1;
+    std::vector<int> fixedTiles;
+    mapeado::Estampado total;
+};
+
+void PieceStamper::refreshAnimations() {
+    const Tileset *tileset = this->editor->layout ? this->editor->layout->tileset_primary : nullptr;
+    const QString current = this->comboBox_Animations->currentData().toString();
+    const QSignalBlocker blocker(this->comboBox_Animations);
+    this->comboBox_Animations->clear();
+    const bool supported = tileset && !tileset->animations_path.isEmpty() && this->unsupportedReason.isEmpty();
+    this->button_ImportAnimation->setEnabled(supported);
+    this->comboBox_Animations->setEnabled(supported);
+    if (!supported) {
+        this->button_RemoveAnimation->setEnabled(false);
+        this->comboBox_Animations->addItem(tileset ? "El tileset no tiene animations en headers.h" : "Sin tileset");
+        return;
+    }
+    const auto animations = Stamping::animations(tileset);
+    this->comboBox_Animations->addItem(animations.empty() ? "Ninguna: importa una" : "Elige una…");
+    for (const mapeado::Animacion &animation : animations) {
+        const QString name = QString::fromStdString(animation.nombre);
+        this->comboBox_Animations->addItem(QString("%1 (%2 fotogramas)").arg(name).arg(animation.fotogramas.size()), name);
+        this->comboBox_Animations->setItemData(this->comboBox_Animations->count() - 1,
+            QString("%1×%2 px, %3 tiles desde el %4, cada fotograma dura %5 del juego, paleta %6")
+                .arg(animation.ancho * 8).arg(animation.alto * 8).arg(animation.ancho * animation.alto)
+                .arg(animation.tile).arg(animation.cada).arg(animation.paleta), Qt::ToolTipRole);
+    }
+    int index = this->comboBox_Animations->findData(current);
+    this->comboBox_Animations->setCurrentIndex(index > 0 ? index : 0);
+    this->button_RemoveAnimation->setEnabled(index > 0);
+    if (index <= 0)
+        stopAnimation();
+}
+
+void PieceStamper::stopAnimation() {
+    this->animationTimer->stop();
+    this->animationFramesShown.clear();
+    if (this->comboBox_Animations->currentIndex() > 0) {
+        const QSignalBlocker blocker(this->comboBox_Animations);
+        this->comboBox_Animations->setCurrentIndex(0);
+    }
+    this->button_RemoveAnimation->setEnabled(false);
+}
+
+void PieceStamper::loadAnimation(int index) {
+    const Tileset *tileset = this->editor->layout ? this->editor->layout->tileset_primary : nullptr;
+    const auto animations = Stamping::animations(tileset);
+    if (!tileset || index <= 0 || index > static_cast<int>(animations.size())) {
+        stopAnimation();
+        return;
+    }
+    const mapeado::Animacion &animation = animations.at(index - 1);
+    const QList<QImage> frames = Stamping::animationFrames(tileset, animation);
+    if (frames.isEmpty())
+        return;
+
+    // The piece is frame 0; the sheet plays the rest at the game's speed.
+    {
+        const QSignalBlocker blocker(this->comboBox_Pieces);
+        this->comboBox_Pieces->setCurrentIndex(-1);
+    }
+    this->sheetImage = frames.first();
+    this->sheetItem->setImage(this->sheetImage); // Selects all of it, which updates the piece
+    this->sheetScene->setSceneRect(this->sheetItem->boundingRect());
+    this->animationFramesShown = frames;
+    this->animationFrame = 0;
+    this->animationTimer->start(qMax(16, animation.cada * 1000 / 60));
+    this->button_RemoveAnimation->setEnabled(true);
+    this->label_Piece->setText(QString("Animación %1: %2 fotogramas. Se estampa el fotograma 0, que en el juego se anima.")
+                               .arg(QString::fromStdString(animation.nombre)).arg(frames.length()));
+}
+
+bool PieceStamper::editTileset(const std::function<mapeado::Estampado(StampJob &)> &edit, const QString &failure) {
+    StampJob job;
+    if (!beginStamp(&job)) {
+        this->strokeFailed = false;
+        return false;
+    }
+    const mapeado::Estampado result = edit(job);
+    if (result.resultado != mapeado::ESTAMPADO) {
+        setStatus(failure + " " + QString::fromStdString(result.mensaje) + ".");
+        WarningMessage::show(failure, QString::fromStdString(result.mensaje) + ".", this);
+        return false;
+    }
+    if (Stamping::applyToTileset(job.data, job.tileset)) {
+        if (this->editor->metatile_selector_item)
+            this->editor->metatile_selector_item->refresh();
+        if (this->tilesetEdited)
+            this->tilesetEdited();
+    }
+    refreshAnimations();
+    updateUsage();
+    return true;
+}
+
+void PieceStamper::importAnimation() {
+    const QString folder = FileDialog::getExistingDirectory(this, "Carpeta con los fotogramas (00.png, 01.png…)", userConfig.projectDir());
+    if (folder.isEmpty())
+        return;
+    QString error;
+    const std::vector<mapeado::Imagen> frames = Stamping::framesFromFolder(folder, &error);
+    if (frames.empty()) {
+        WarningMessage::show("No se puede importar la animación.", error, this);
+        return;
+    }
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, "Importar animación",
+                                               "Nombre (si ya hay una con ese nombre, se cambia):", QLineEdit::Normal,
+                                               QFileInfo(folder).fileName().left(17), &ok).trimmed();
+    if (!ok || name.isEmpty())
+        return;
+    const int interval = QInputDialog::getInt(this, "Importar animación",
+                                              QString("Cuánto dura cada uno de los %1 fotogramas, en fotogramas del juego (60 son un segundo):")
+                                                  .arg(frames.size()),
+                                              16, 1, 0xFFFF, 1, &ok);
+    if (!ok)
+        return;
+    const bool done = editTileset([&](StampJob &job) {
+        return mapeado::Animar(job.format, job.data, job.maps.maps, name.toStdString(), frames, interval, job.fixedTiles);
+    }, "No se puede importar la animación.");
+    if (!done)
+        return;
+    int index = this->comboBox_Animations->findData(name);
+    if (index > 0) {
+        this->comboBox_Animations->setCurrentIndex(index);
+        loadAnimation(index);
+    }
+    setStatus(QString("Animación %1 en el tileset: estampa su fotograma 0 y se animará en el juego. "
+                      "Lo pintado antes con ese arte se anima al optimizar.").arg(name));
+}
+
+void PieceStamper::removeAnimation() {
+    const QString name = this->comboBox_Animations->currentData().toString();
+    if (name.isEmpty())
+        return;
+    if (QuestionMessage::show(QString("¿Quitar la animación %1 del tileset? Sus tiles se quedan con el fotograma 0, sin animar.").arg(name), this) != QMessageBox::Yes)
+        return;
+    const bool done = editTileset([&](StampJob &job) {
+        mapeado::Estampado result;
+        if (!mapeado::QuitarAnimacion(job.data, name.toStdString())) {
+            result.resultado = mapeado::PIEZA_NO_VALIDA;
+            result.mensaje = "no hay ninguna animación que se llame así";
+        }
+        return result;
+    }, "No se puede quitar la animación.");
+    if (done) {
+        stopAnimation();
+        updatePiece(); // The piece is still frame 0, now just art
+        setStatus(QString("Animación %1 quitada.").arg(name));
+    }
 }
 
 QPoint PieceStamper::snapToGrid(const QPointF &pos) const {
@@ -381,16 +578,6 @@ void PieceStamper::mapMouseEvent(QGraphicsSceneMouseEvent *event, LayoutPixmapIt
 
 // One stamping operation: the tileset and its maps as the library sees them, changed by
 // one or more stamps, and applied to porymap only if all of them fit.
-struct PieceStamper::StampJob {
-    Layout *layout = nullptr;
-    Tileset *tileset = nullptr;
-    mapeado::Formato format;
-    mapeado::Tileset data;
-    Stamping::TilesetMaps maps;
-    int target = -1;
-    std::vector<int> fixedTiles;
-    mapeado::Estampado total;
-};
 
 bool PieceStamper::beginStamp(StampJob *job) {
     job->layout = this->editor->layout;
@@ -690,12 +877,19 @@ void PieceStamper::updateUsage() {
     for (int p : mapPalettes)
         ids.append(QString::number(p));
     const int perMap = Project::getNumPalettesPrimary();
-    this->label_Usage->setText(QString("<b>%1</b><table>%2%3%4%5</table>")
+    const auto animations = Stamping::animations(tileset);
+    int animatedTiles = 0;
+    for (const mapeado::Animacion &animation : animations)
+        animatedTiles += animation.ancho * animation.alto;
+    const QString animationsRow = animations.empty() ? QString()
+        : QString("<tr><td>Animaciones</td><td align=right>&nbsp;%1 (%2 tiles)</td></tr>").arg(animations.size()).arg(animatedTiles);
+    this->label_Usage->setText(QString("<b>%1</b><table>%2%3%4%5%6</table>")
         .arg(tileset->name.toHtmlEscaped())
         .arg(row("Tiles", usage.tiles, Project::getNumTilesPrimary()))
         .arg(row("Paletas que carga el mapa", mapPalettes.length(), perMap))
         .arg(row(QString("Paletas del tileset (%1 colores)").arg(usage.colors), usage.palettes, tileset->paletteLimit()))
-        .arg(row("Metatiles", usage.metatiles, Project::getNumMetatilesPrimary())));
+        .arg(row("Metatiles", usage.metatiles, Project::getNumMetatilesPrimary()))
+        .arg(animationsRow));
     this->label_Usage->setToolTip(mapPalettes.length() > perMap
         ? QString("El mapa usa %1 paletas (%2) y el juego solo carga %3: sobran metatiles con paletas distintas.")
               .arg(mapPalettes.length()).arg(ids.join(", ")).arg(perMap)

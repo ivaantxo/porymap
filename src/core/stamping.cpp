@@ -33,6 +33,10 @@ int numPalettes(const Tileset *tileset) {
     return qMin(tileset->palettes.length(), tileset->paletteLimit());
 }
 
+std::vector<uint8_t> toBytes(const QByteArray &data) {
+    return std::vector<uint8_t>(data.constBegin(), data.constEnd());
+}
+
 QList<QRgb> newPalette(const mapeado::Paleta &palette) {
     QList<QRgb> colors;
     for (int i = 0; i < Tileset::numColorsPerPalette(); i++)
@@ -111,6 +115,7 @@ mapeado::Tileset fromTileset(const Tileset *tileset) {
         data.metatiles.push_back(entries);
         data.atributos.push_back(static_cast<uint16_t>(metatile->getAttributes()));
     }
+    mapeado::AnimacionesDeBytes(toBytes(tileset->animationsData), data.animaciones);
     return data;
 }
 
@@ -196,9 +201,68 @@ bool applyToTileset(const mapeado::Tileset &data, Tileset *tileset) {
         }
     }
 
+    // Animations: the file as the game reads it.
+    if (!tileset->animations_path.isEmpty()) {
+        const std::vector<uint8_t> bytes = mapeado::BytesDeAnimaciones(data.animaciones);
+        const QByteArray animations(reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()));
+        const QByteArray before = tileset->animationsData.isEmpty() ? QByteArray(32, '\0') : tileset->animationsData;
+        if (animations != before) {
+            tileset->animationsData = animations;
+            changed = true;
+        }
+    }
+
     if (changed)
         tileset->setHasUnsavedChanges(true);
     return changed;
+}
+
+std::vector<mapeado::Animacion> animations(const Tileset *tileset) {
+    std::vector<mapeado::Animacion> result;
+    if (tileset)
+        mapeado::AnimacionesDeBytes(toBytes(tileset->animationsData), result);
+    return result;
+}
+
+QList<QImage> animationFrames(const Tileset *tileset, const mapeado::Animacion &animation) {
+    QList<QImage> frames;
+    const QList<QRgb> palette = tileset->palettes.value(animation.paleta);
+    for (const auto &frame : animation.fotogramas) {
+        QImage image(animation.ancho * Tile::pixelWidth(), animation.alto * Tile::pixelHeight(), QImage::Format_ARGB32);
+        image.fill(Qt::transparent);
+        for (int t = 0; t < static_cast<int>(frame.size()); t++)
+        for (int i = 0; i < Tile::numPixels(); i++) {
+            int index = frame[t][i];
+            if (index)
+                image.setPixel((t % animation.ancho) * Tile::pixelWidth() + i % Tile::pixelWidth(),
+                               (t / animation.ancho) * Tile::pixelHeight() + i / Tile::pixelWidth(),
+                               palette.value(index, qRgb(0, 0, 0)) | 0xFF000000);
+        }
+        frames.append(image);
+    }
+    return frames;
+}
+
+std::vector<mapeado::Imagen> framesFromFolder(const QString &folder, QString *error) {
+    std::vector<mapeado::Imagen> frames;
+    QMap<int, QString> files;
+    for (const QString &name : QDir(folder).entryList({"*.png"}, QDir::Files)) {
+        bool ok = false;
+        int number = name.section('.', 0, 0).toInt(&ok);
+        if (ok)
+            files.insert(number, name);
+    }
+    for (const QString &name : files) {
+        QImage image(QDir(folder).filePath(name));
+        if (image.isNull()) {
+            if (error) *error = QString("No se puede leer %1.").arg(name);
+            return {};
+        }
+        frames.push_back(pieceFromImage(image));
+    }
+    if (frames.empty() && error)
+        *error = QString("La carpeta no tiene fotogramas: 00.png, 01.png… (o 0.png, 1.png…).");
+    return frames;
 }
 
 std::vector<int> fixedTiles(const Tileset *tileset) {
@@ -313,6 +377,16 @@ Usage usage(const Tileset *tileset) {
                 colorsUsed[tile.palette] += tileColors[tile.tileId];
         }
         if (!empty) u.metatiles++;
+    }
+    // The tiles of the animations, and the colors of all their frames, are in use too.
+    for (const mapeado::Animacion &animation : animations(tileset)) {
+        for (int t = animation.tile; t < animation.tile + animation.ancho * animation.alto && t < numTiles; t++)
+            tileUsed[t] = true;
+        for (const auto &frame : animation.fotogramas)
+            for (const mapeado::Tile &tile : frame)
+                for (uint8_t index : tile)
+                    if (index && animation.paleta < palettes)
+                        colorsUsed[animation.paleta].insert(index);
     }
     u.tiles = tileUsed.count(true);
     for (const QSet<int> &colors : colorsUsed) {

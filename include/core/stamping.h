@@ -58,6 +58,12 @@ struct Usage {
 };
 Usage usage(const Tileset *tileset);
 
+// The tileset's tile animations, and each frame as an image with its palette.
+std::vector<mapeado::Animacion> animations(const Tileset *tileset);
+QList<QImage> animationFrames(const Tileset *tileset, const mapeado::Animacion &animation);
+// The frames in a folder: its PNGs in the order of their number (00.png, 01.png… or 0.png, 1.png…).
+std::vector<mapeado::Imagen> framesFromFolder(const QString &folder, QString *error);
+
 // The tileset palettes a map loads: those of the metatiles in its blocks and border (the
 // ones whose tile isn't tile 0). It isn't stored anywhere: each map works it out from
 // its own metatiles, so nothing is carried over from one map to another.

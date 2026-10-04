@@ -16,6 +16,9 @@
 // asi que no se arrastran de un mapa a otro. Al pintar, un trozo de 8x8 va primero a
 // una paleta que el mapa ya carga.
 //
+// Animaciones: unos tiles del tileset que el juego cambia por los de cada fotograma. Al
+// pintar, el arte igual a su fotograma 0 usa esos tiles y se anima solo (Animar).
+//
 // El comportamiento, el nivel y la colision NO salen del arte: se editan aparte, los
 // dos primeros en los atributos del metatile y la colision en el bloque. Por eso cada
 // compilacion parte de lo que habia antes y lo respeta:
@@ -77,11 +80,25 @@ typedef std::array<uint32_t, 12> Metatile;
 inline int TileDeEntrada(uint32_t e) { return e & 0x3FF; }
 inline int PaletaDeEntrada(uint32_t e) { return e >> 12; }
 
+// Una animacion: unos tiles seguidos del tileset que el juego va cambiando por los de
+// cada fotograma. Todos sus colores van en una paleta del tileset. En los tiles del
+// tileset esta el fotograma 0, que es el que se ve al pintar: un trozo de 8x8 de una
+// pieza igual a uno del fotograma 0 (tal cual o volteado) pasa a usar el tile animado.
+struct Animacion {
+    std::string nombre;                   // como mucho 17 letras
+    int tile = 0;                         // el primero
+    int ancho = 0, alto = 0;              // en tiles
+    int paleta = 0;                       // del tileset
+    int cada = 16;                        // fotogramas del juego que dura cada uno
+    std::vector<std::vector<Tile>> fotogramas; // [fotograma][y * ancho + x]
+};
+
 struct Tileset {
     std::vector<Tile> tiles;
     std::vector<Paleta> paletas;          // todas las de sus mapas
     std::vector<Metatile> metatiles;
     std::vector<uint16_t> atributos;
+    std::vector<Animacion> animaciones;
 };
 
 struct Layout {
@@ -193,6 +210,26 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
 bool Optimizar(const Formato &f, const Tileset &ts, const std::vector<MapaDelTileset> &mapas,
                const std::vector<Fijado> &fijados, const std::vector<int> &tilesFijos, bool compactar,
                Salida &salida, std::string &error);
+
+// Mete una animacion en el tileset, o la cambia si ya hay una con ese nombre. Todos los
+// fotogramas miden lo mismo, multiplo de 8, y entre todos tienen como mucho 15 colores
+// (lo transparente es el color 0). Una animacion nueva va a tiles libres seguidos y a
+// una paleta que ya tenga sus colores o a una para ella sola; cambiarla deja sus tiles y,
+// si caben los colores, su paleta, y tiene que medir lo mismo. Lo pintado antes con ese
+// arte se anima al optimizar. Si no cabe, no toca nada.
+Estampado Animar(const Formato &f, Tileset &ts, const std::vector<MapaDelTileset> &mapas, const std::string &nombre,
+                 const std::vector<Imagen> &fotogramas, int cada, const std::vector<int> &tilesFijos);
+
+// Quita la animacion: sus tiles se quedan con el fotograma 0, ya sin animar.
+bool QuitarAnimacion(Tileset &ts, const std::string &nombre);
+
+// Las animaciones como van en animations.bin, que lee el juego (src/tileset_anims.c):
+// una ficha de 32 bytes por animacion, una a cero al final, y detras los fotogramas. La
+// ficha: tile (u16), tiles (u16), fotogramas (u16), cada (u16), donde empiezan sus
+// fotogramas en el archivo (u32), paleta (u8), ancho en tiles (u8) y el nombre (18
+// bytes, acabado en 0). Los fotogramas van seguidos, en 4bpp como en la VRAM.
+std::vector<uint8_t> BytesDeAnimaciones(const std::vector<Animacion> &animaciones);
+bool AnimacionesDeBytes(const std::vector<uint8_t> &bytes, std::vector<Animacion> &animaciones);
 
 // Las paletas del tileset que carga un mapa, de menor a mayor: las de los metatiles de
 // sus casillas y de su borde. Una entrada usa su paleta si su tile no es el 0.

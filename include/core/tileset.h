@@ -41,6 +41,14 @@ public:
     QString metatile_palettes_path;
     QString palettesFolder;
     bool usesPalettePool() const { return !this->palettesFolder.isEmpty() && !this->metatile_palettes_path.isEmpty(); }
+
+    // Tile animations (albor): animations.bin, from the tileset's `animations` member. Kept
+    // as the raw file; the mapeado library (src/lib/mapeado) reads and writes it.
+    QString animations_label;
+    QString animations_path;
+    QByteArray animationsData;
+    bool loadAnimations();
+    bool saveAnimations();
     // How many palettes it has, and can have. Without a pool, the project's fixed number.
     int numPalettes() const;
     int paletteLimit() const;

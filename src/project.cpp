@@ -1283,6 +1283,7 @@ Tileset* Project::getTileset(const QString &label, bool forceLoad) {
         tileset->metatiles_label = tilesetAttributes.value("metatiles");
         tileset->metatile_attrs_label = tilesetAttributes.value("metatileAttributes");
         tileset->metatile_palettes_label = tilesetAttributes.value("metatilePalettes");
+        tileset->animations_label = tilesetAttributes.value("animations");
     }
 
     if (!loadTilesetAssets(tileset)) {
@@ -1574,6 +1575,9 @@ void Project::readTilesetPaths(Tileset* tileset) {
             const QString metatilePalettesPath = metatileIncbins.value(tileset->metatile_palettes_label);
             if (!metatilePalettesPath.isEmpty())
                 tileset->metatile_palettes_path = rootDir + metatilePalettesPath;
+            const QString animationsPath = metatileIncbins.value(tileset->animations_label);
+            if (!tileset->animations_label.isEmpty() && !animationsPath.isEmpty())
+                tileset->animations_path = rootDir + animationsPath;
             QFile file(rootDir + graphicsFile);
             if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 const QRegularExpression re(QString(R"(\b%1\s*\[\s*\]\s*\[\s*\d+\s*\]\s*=\s*INCBIN_U16\s*\(\s*"([^"]+)\")").arg(QRegularExpression::escape(tileset->palettes_label)));
@@ -1633,6 +1637,8 @@ Tileset *Project::createNewTileset(QString name, bool secondary, bool checkerboa
         tileset->palettesFolder = palettesPath;
         tileset->metatile_palettes_path = fullDirectoryPath + "/metatile_palettes.bin";
         tileset->metatile_palettes_label = "gMetatilePalettes_" + Tileset::stripPrefix(name);
+        tileset->animations_path = fullDirectoryPath + "/animations.bin";
+        tileset->animations_label = "gTilesetAnimations_" + Tileset::stripPrefix(name);
     }
 
     // Set default tiles image

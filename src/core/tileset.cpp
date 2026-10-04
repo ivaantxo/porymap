@@ -27,6 +27,9 @@ Tileset::Tileset(const Tileset &other)
       metatile_palettes_label(other.metatile_palettes_label),
       metatile_palettes_path(other.metatile_palettes_path),
       palettesFolder(other.palettesFolder),
+      animations_label(other.animations_label),
+      animations_path(other.animations_path),
+      animationsData(other.animationsData),
       metatileLabels(other.metatileLabels),
       palettes(other.palettes),
       palettePreviews(other.palettePreviews),
@@ -58,6 +61,9 @@ Tileset &Tileset::operator=(const Tileset &other) {
     metatile_palettes_label = other.metatile_palettes_label;
     metatile_palettes_path = other.metatile_palettes_path;
     palettesFolder = other.palettesFolder;
+    animations_label = other.animations_label;
+    animations_path = other.animations_path;
+    animationsData = other.animationsData;
     metatileLabels = other.metatileLabels;
     palettes = other.palettes;
     palettePreviews = other.palettePreviews;
@@ -361,6 +367,8 @@ bool Tileset::appendToHeaders(const QString &filepath, const QString &friendlyNa
             dataString.append(QString("    .metatilePalettes = %1,\n").arg(this->metatile_palettes_label));
         dataString.append(QString("    .metatileAttributes = gMetatileAttributes_%1,\n").arg(friendlyName));
         if (projectConfig.tilesetsHaveCallback) dataString.append("    .callback = NULL,\n");
+        if (!this->animations_label.isEmpty())
+            dataString.append(QString("    .animations = %1,\n").arg(this->animations_label));
         dataString.append("};\n");
     }
     file.write(dataString.toUtf8());
@@ -437,6 +445,8 @@ bool Tileset::appendToMetatiles(const QString &filepath, const QString &friendly
         dataString.append(QString("const u16 gMetatiles_%1[] = INCBIN_U16(\"%2\");\n").arg(friendlyName, metatilesPath));
         if (!this->metatile_palettes_label.isEmpty())
             dataString.append(QString("const u8 %1[] = INCBIN_U8(\"%2/metatile_palettes.bin\");\n").arg(this->metatile_palettes_label, tilesetDir));
+        if (!this->animations_label.isEmpty())
+            dataString.append(QString("const u32 %1[] = INCBIN_U32(\"%2/animations.bin\");\n").arg(this->animations_label, tilesetDir));
         QString numBits = QString::number(projectConfig.metatileAttributesSize * 8);
         dataString.append(QString("const u%1 gMetatileAttributes_%2[] = INCBIN_U%1(\"%3\");\n").arg(numBits, friendlyName, metatileAttrsPath));
     }
@@ -783,12 +793,39 @@ bool Tileset::savePalettes() {
     return success;
 }
 
+bool Tileset::loadAnimations() {
+    this->animationsData.clear();
+    if (this->animations_path.isEmpty())
+        return true;
+    QFile file(this->animations_path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        logWarn(QString("Could not open '%1' for reading: %2").arg(this->animations_path).arg(file.errorString()));
+        return true;
+    }
+    this->animationsData = file.readAll();
+    return true;
+}
+
+bool Tileset::saveAnimations() {
+    if (this->animations_path.isEmpty())
+        return true;
+    QFile file(this->animations_path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        logError(QString("Could not open '%1' for writing: %2").arg(this->animations_path).arg(file.errorString()));
+        return false;
+    }
+    // Without animations it's just the empty record that ends the list.
+    file.write(this->animationsData.isEmpty() ? QByteArray(32, '\0') : this->animationsData);
+    return true;
+}
+
 bool Tileset::load() {
     bool success = true;
     if (!loadPalettes()) success = false;
     if (!loadTilesImage()) success = false;
     if (!loadMetatiles()) success = false;
     if (!loadMetatileAttributes()) success = false;
+    if (!loadAnimations()) success = false;
     // Whatever was edited in memory has just been replaced by what's on disk.
     m_hasUnsavedTilesImage = false;
     m_hasUnsavedChanges = false;
@@ -802,6 +839,7 @@ bool Tileset::save() {
     if (!saveTilesImage()) success = false;
     if (!saveMetatiles()) success = false;
     if (!saveMetatileAttributes()) success = false;
+    if (!saveAnimations()) success = false;
     if (success) m_hasUnsavedChanges = false;
     return success;
 }
