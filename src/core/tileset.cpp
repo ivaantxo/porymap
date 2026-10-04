@@ -722,7 +722,12 @@ int Tileset::numPalettes() const {
 }
 
 int Tileset::paletteLimit() const {
-    return usesPalettePool() ? Project::getMaxPalettesInTileset() : Project::getNumPalettesTotal();
+    if (usesPalettePool())
+        return Project::getMaxPalettesInTileset();
+    // With two tilesets per layout, the palettes after the primary's are drawn from the secondary.
+    if (!Project::usingSingleTileset() && !this->is_secondary)
+        return Project::getNumPalettesPrimary();
+    return Project::getNumPalettesTotal();
 }
 
 int Tileset::numBlockPalettes(const Tileset *primaryTileset) {

@@ -22,6 +22,9 @@ namespace Stamping {
 
 // Empty if pieces can be stamped in this project; otherwise, why not.
 QString unsupportedReason();
+// Empty if `tileset` gets the whole pipeline (one tileset per layout, palettes per map);
+// otherwise, what's missing and what pieces are limited to.
+QString limitedReason(const Tileset *tileset);
 
 mapeado::Formato format(const Tileset *tileset);
 

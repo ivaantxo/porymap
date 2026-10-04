@@ -55,6 +55,21 @@ QString unsupportedReason() {
     return QString();
 }
 
+QString limitedReason(const Tileset *tileset) {
+    if (!tileset)
+        return QString();
+    if (!Project::usingSingleTileset())
+        return QString("Este proyecto usa dos tilesets por layout (en include/fieldmap.h no está "
+                       "<tt>#define NUM_TILESETS_PER_LAYOUT 1</tt>): las piezas solo pueden usar las %1 paletas "
+                       "del tileset primario, sin paletas por mapa. ¿Está abierta la versión de albor con un solo tileset?")
+            .arg(tileset->paletteLimit());
+    if (!tileset->usesPalettePool())
+        return QString("El tileset %1 no tiene paletas por mapa (le falta <tt>.metatilePalettes</tt> en headers.h "
+                       "o su carpeta palettes): las piezas solo pueden usar sus %2 paletas.")
+            .arg(tileset->name.toHtmlEscaped()).arg(tileset->paletteLimit());
+    return QString();
+}
+
 mapeado::Formato format(const Tileset *tileset) {
     mapeado::Formato f;
     f.maxTiles = Project::getNumTilesPrimary();

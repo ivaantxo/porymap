@@ -81,6 +81,14 @@ void PieceSheetItem::draw() {
 PieceStamper::PieceStamper(Editor *editor, QWidget *parent) : QWidget(parent), editor(editor) {
     auto *layout = new QVBoxLayout(this);
 
+    // Only shown when the project or tileset doesn't get the whole pipeline.
+    this->label_Limited = new QLabel(this);
+    this->label_Limited->setWordWrap(true);
+    this->label_Limited->setTextFormat(Qt::RichText);
+    this->label_Limited->setStyleSheet("QLabel { background: #fff3cd; color: #664d03; border: 1px solid #e0b000; padding: 4px; }");
+    this->label_Limited->hide();
+    layout->addWidget(this->label_Limited);
+
     // Library
     auto *libraryRow = new QHBoxLayout();
     this->comboBox_Pieces = new QComboBox(this);
@@ -870,6 +878,9 @@ void PieceStamper::updateUsage() {
     Layout *layout = this->editor->layout;
     const Tileset *tileset = layout ? layout->tileset_primary : nullptr;
     this->button_Optimize->setEnabled(tileset && this->unsupportedReason.isEmpty());
+    const QString limited = Stamping::limitedReason(tileset);
+    this->label_Limited->setText(limited);
+    this->label_Limited->setVisible(!limited.isEmpty());
     if (!tileset) {
         this->label_Usage->clear();
         return;

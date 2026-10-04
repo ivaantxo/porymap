@@ -68,6 +68,7 @@ public:
 private:
     Editor *editor;
 
+    QLabel *label_Limited;
     QComboBox *comboBox_Pieces;
     QPushButton *button_Import;
     QPushButton *button_Remove;

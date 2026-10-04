@@ -67,6 +67,10 @@ Si el tileset tiene `.animations` en `headers.h` (un `INCBIN_U32` de su `animati
 
 Se guarda con el tileset. En el mapa, porymap enseña siempre el fotograma 0.
 
+### Con dos tilesets por layout
+
+En un proyecto de siempre (sin `NUM_TILESETS_PER_LAYOUT 1`), la pestaña avisa arriba, en amarillo, y las piezas solo usan las `NUM_PALS_IN_PRIMARY` paletas del primario: las de después porymap las pinta con las del secundario, así que el arte saldría con otros colores. Si no caben, no se pinta. Lo mismo, con su aviso, para un tileset sin paletas por mapa.
+
 El motor es la biblioteca de `tools/mapeado` de albor, copiada en `src/lib/mapeado`: los cambios van primero allí. Necesita metatiles de triple capa. Se compila como porymap ([INSTALL.md](INSTALL.md)); las descargas de abajo son del porymap original, sin las piezas.
 
 ## Download
