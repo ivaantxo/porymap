@@ -15,12 +15,12 @@ Este fork añade la pestaña **Piezas**, junto a Metatiles, Collision y Prefabs,
 - **Importar:** sirve cualquier PNG cuyo ancho y alto sean múltiplos de 8, sin tamaño ni paleta fijados. Puede ser una pieza suelta o una hoja entera; en la hoja se elige con el ratón qué trozo se estampa.
 - **Estampar:** con la pestaña abierta y el lápiz, un clic estampa la pieza en la capa elegida (baja, media o alta), en la rejilla de 8 o de 16 píxeles. Arrastrando se repite. Lo transparente de la pieza deja ver lo que había, o lo borra si se marca *Lo transparente borra*.
 - **El tileset se rellena solo:** los colores, los tiles (con volteos) y los metatiles que hagan falta se añaden al tileset primario del mapa en ese momento. Si algo no cabe no se pinta nada, y se avisa de qué falta:
-  - no hay hueco en las paletas;
+  - el mapa ya carga todas las paletas que caben y a ninguna le caben los colores, o la pieza necesita más paletas nuevas de las que le quedan al mapa;
   - no hay hueco para tiles;
   - no hay hueco para metatiles;
   - un trozo de 8×8 tiene más de 15 colores.
 - **Comportamiento, nivel y colisión** no salen del arte. El metatile nuevo hereda el comportamiento y el nivel de la casilla, la colisión de la casilla no cambia, y todo se edita aparte, como siempre.
-- **Contadores y Optimizar:** el panel muestra los tiles, paletas y metatiles en uso. *Optimizar tileset* lo reempaqueta desde lo pintado en todos los mapas que lo usan: junta metatiles repetidos, quita los que no usa nadie y libera tiles y colores. Los metatiles con nombre en `metatile_labels.h` y los tiles de `tiles_fijos.txt` (junto al `tiles.png`) se respetan.
+- **Contadores y Optimizar:** el panel muestra los tiles y metatiles en uso, las paletas que carga el mapa y las que usa el tileset. *Optimizar tileset* lo reempaqueta desde lo pintado en todos los mapas que lo usan: junta metatiles repetidos, quita los que no usa nadie, libera tiles y colores y reparte los colores para que cada mapa cargue las menos paletas posibles. Los metatiles con nombre en `metatile_labels.h` y los tiles de `tiles_fijos.txt` (junto al `tiles.png`) se respetan.
 - **Capas que se ven:** oculta capas mientras la pestaña está abierta.
 - **Guardar y deshacer:** el tileset se guarda con el mapa. Estampar se deshace con Ctrl+Z; optimizar no, porque guarda el tileset y sus mapas y vacía su historial.
 
@@ -36,10 +36,25 @@ El camino inteligente de siempre, con metatiles, sigue yendo por números. Para 
 
 Si el `fieldmap.h` del proyecto define `NUM_TILESETS_PER_LAYOUT` como 1, porymap trabaja con un solo tileset por layout:
 
-- el primario es el único: tiene todos los tiles, metatiles y paletas (`NUM_TILES_IN_PRIMARY`, `NUM_METATILES_IN_PRIMARY` y `NUM_PALS_IN_PRIMARY`, que pueden llegar a 1024, a lo que dejen las máscaras del bloque y a 16);
+- el primario es el único: tiene todos los tiles, metatiles y paletas (`NUM_TILES_IN_PRIMARY`, `NUM_METATILES_IN_PRIMARY` y `NUM_PALS_IN_PRIMARY`, que pueden llegar a 1024, a lo que dejen las máscaras del bloque y a 16; con paletas por mapa, `NUM_PALS_IN_PRIMARY` son las que carga cada mapa);
 - no se carga ningún secundario, ni sus paletas; los `NUM_*_TOTAL` no se usan;
 - desaparece el secundario de la interfaz: panel del layout, nuevo layout, nuevo tileset, configuración del proyecto y, en el editor de tilesets, los menús de importar y exportar, *Change Number of Metatiles* y *Export Metatiles Image*;
 - `layouts.json` se guarda sin `secondary_tileset`.
+
+### Paletas por mapa
+
+Con un solo tileset por layout, el tileset puede guardar las paletas de todos sus mapas, hasta `MAX_PALS_IN_TILESET` (256 en albor), y cada mapa carga solo las que usan sus metatiles, como mucho `NUM_PALS_IN_PRIMARY` (15). Para eso, en el proyecto:
+
+- `graphics.h` incluye todas las paletas del tileset juntas, con un solo `INCBIN_U16(".../palettes.gbapal")` que el Makefile hace con `palettes/00.pal`, `01.pal`…;
+- el tileset tiene `.metatilePalettes` en `headers.h`: un byte por entrada de metatile con su paleta del tileset (`metatile_palettes.bin`). En `metatiles.bin` quedan sus 4 bits bajos.
+
+Entonces porymap:
+
+- carga todas las `palettes/NN.pal` de la carpeta y pinta cada tile con su paleta del tileset, pase o no de 15;
+- en el editor de tilesets, y en el de paletas, se elige entre todas;
+- al estampar, los colores nuevos van primero a las paletas que el mapa ya carga; luego a una del tileset que ya los tenga (el mapa la carga y aprovecha sus tiles); luego a una cargada con sitio; y si el mapa aún puede cargar otra, a una del tileset con parte de los colores, a una que no use nadie o a una nueva;
+- qué paletas carga cada mapa no se guarda: sale de sus metatiles cada vez, así que no se arrastran de un mapa a otro. El contador lo dice, y se pone en rojo si un mapa pasa del máximo pintando metatiles a mano;
+- guarda las paletas nuevas como `NN.pal`, quita las que sobren al optimizar y escribe `metatile_palettes.bin`. Un tileset nuevo se crea ya así.
 
 El motor es la biblioteca de `tools/mapeado` de albor, copiada en `src/lib/mapeado`: los cambios van primero allí. Necesita metatiles de triple capa. Se compila como porymap ([INSTALL.md](INSTALL.md)); las descargas de abajo son del porymap original, sin las piezas.
 

@@ -3,6 +3,7 @@
 #include "config.h"
 #include "log.h"
 #include "prefab.h"
+#include "maplayout.h"
 
 #include <QDir>
 #include <QFile>
@@ -10,6 +11,7 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QTextStream>
+#include <algorithm>
 
 namespace Stamping {
 
@@ -28,7 +30,14 @@ mapeado::Color fromQRgb(QRgb color) {
 }
 
 int numPalettes(const Tileset *tileset) {
-    return qMin(tileset->palettes.length(), Project::getNumPalettesPrimary());
+    return qMin(tileset->palettes.length(), tileset->paletteLimit());
+}
+
+QList<QRgb> newPalette(const mapeado::Paleta &palette) {
+    QList<QRgb> colors;
+    for (int i = 0; i < Tileset::numColorsPerPalette(); i++)
+        colors.append(palette[i] == mapeado::TRANSPARENTE ? qRgb(248, 0, 248) : toQRgb(palette[i]));
+    return colors;
 }
 
 } // namespace
@@ -42,11 +51,12 @@ QString unsupportedReason() {
     return QString();
 }
 
-mapeado::Formato format() {
+mapeado::Formato format(const Tileset *tileset) {
     mapeado::Formato f;
     f.maxTiles = Project::getNumTilesPrimary();
     f.maxMetatiles = Project::getNumMetatilesPrimary();
     f.maxPaletas = Project::getNumPalettesPrimary();
+    f.maxPaletasTileset = tileset ? tileset->paletteLimit() : Project::getNumPalettesPrimary();
     f.mascaraId = projectConfig.blockMetatileIdMask;
     // The library keeps these bits of each block as they are: collision, and elevation too.
     f.mascaraColision = ~projectConfig.blockMetatileIdMask;
@@ -94,8 +104,10 @@ mapeado::Tileset fromTileset(const Tileset *tileset) {
     for (const Metatile *metatile : tileset->metatiles()) {
         mapeado::Metatile entries;
         entries.fill(0);
-        for (int i = 0; i < kTilesPerMetatile && i < metatile->tiles.length(); i++)
-            entries[i] = metatile->tiles.at(i).rawValue();
+        for (int i = 0; i < kTilesPerMetatile && i < metatile->tiles.length(); i++) {
+            const Tile &tile = metatile->tiles.at(i);
+            entries[i] = (tile.rawValue() & 0xFFF) | (static_cast<uint32_t>(tile.palette) << 12);
+        }
         data.metatiles.push_back(entries);
         data.atributos.push_back(static_cast<uint16_t>(metatile->getAttributes()));
     }
@@ -134,6 +146,20 @@ bool applyToTileset(const mapeado::Tileset &data, Tileset *tileset) {
     }
 
     // Palettes: only the colors that really changed, so the rest keep their exact values.
+    // With a palette pool there may be new palettes at the end, or fewer after optimizing.
+    if (tileset->usesPalettePool()) {
+        const int count = qMax(1, static_cast<int>(data.paletas.size()));
+        while (tileset->palettes.length() > count) {
+            tileset->palettes.removeLast();
+            tileset->palettePreviews.removeLast();
+            changed = true;
+        }
+        for (int p = tileset->palettes.length(); p < static_cast<int>(data.paletas.size()); p++) {
+            tileset->palettes.append(newPalette(data.paletas[p]));
+            tileset->palettePreviews.append(newPalette(data.paletas[p]));
+            changed = true;
+        }
+    }
     for (int p = 0; p < numPalettes(tileset) && p < static_cast<int>(data.paletas.size()); p++) {
         for (int i = 1; i < Tileset::numColorsPerPalette() && i < tileset->palettes[p].length(); i++) {
             mapeado::Color color = data.paletas[p][i];
@@ -155,8 +181,11 @@ bool applyToTileset(const mapeado::Tileset &data, Tileset *tileset) {
     for (int m = 0; m < numMetatiles; m++) {
         Metatile *metatile = const_cast<Metatile*>(tileset->metatileAt(m));
         QList<Tile> tiles;
-        for (int i = 0; i < kTilesPerMetatile; i++)
-            tiles.append(Tile(data.metatiles[m][i]));
+        for (int i = 0; i < kTilesPerMetatile; i++) {
+            Tile tile(static_cast<uint16_t>(data.metatiles[m][i] & 0xFFF));
+            tile.palette = mapeado::PaletaDeEntrada(data.metatiles[m][i]);
+            tiles.append(tile);
+        }
         if (metatile->tiles != tiles) {
             metatile->tiles = tiles;
             changed = true;
@@ -291,6 +320,28 @@ Usage usage(const Tileset *tileset) {
         u.colors += colors.size();
     }
     return u;
+}
+
+QList<int> mapPalettes(const Layout *layout) {
+    QSet<int> palettes;
+    const Tileset *tileset = layout ? layout->tileset_primary : nullptr;
+    if (!tileset)
+        return {};
+    QSet<int> seen;
+    for (const Blockdata *blocks : {&layout->blockdata, &layout->border}) {
+        for (const Block &block : *blocks) {
+            const int metatileId = Metatile::getIndexInTileset(block.metatileId());
+            if (seen.contains(metatileId) || metatileId >= tileset->numMetatiles())
+                continue;
+            seen.insert(metatileId);
+            for (const Tile &tile : tileset->metatileAt(metatileId)->tiles)
+                if (tile.tileId != 0)
+                    palettes.insert(tile.palette);
+        }
+    }
+    QList<int> sorted(palettes.constBegin(), palettes.constEnd());
+    std::sort(sorted.begin(), sorted.end());
+    return sorted;
 }
 
 } // namespace Stamping

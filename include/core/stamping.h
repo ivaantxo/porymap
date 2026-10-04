@@ -23,7 +23,7 @@ namespace Stamping {
 // Empty if pieces can be stamped in this project; otherwise, why not.
 QString unsupportedReason();
 
-mapeado::Formato format();
+mapeado::Formato format(const Tileset *tileset);
 
 // Alpha below 128, or the magenta 248,0,248, is transparent.
 mapeado::Imagen pieceFromImage(const QImage &image);
@@ -57,6 +57,11 @@ struct Usage {
     int metatiles = 0;     // not empty
 };
 Usage usage(const Tileset *tileset);
+
+// The tileset palettes a map loads: those of the metatiles in its blocks and border (the
+// ones whose tile isn't tile 0). It isn't stored anywhere: each map works it out from
+// its own metatiles, so nothing is carried over from one map to another.
+QList<int> mapPalettes(const Layout *layout);
 
 } // namespace Stamping
 

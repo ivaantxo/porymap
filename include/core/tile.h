@@ -16,7 +16,9 @@ public:
     uint16_t tileId:10;
     uint16_t xflip:1;
     uint16_t yflip:1;
-    uint16_t palette:4;
+    // With a palette pool (Tileset::usesPalettePool), the tileset's palette, which can be
+    // past 15: metatiles.bin keeps its low 4 bits and metatile_palettes.bin all of it.
+    uint16_t palette:8;
     uint16_t rawValue() const;
 
     Qt::Orientations orientation() const;

@@ -81,6 +81,7 @@ private:
     QLabel *label_Status;
 
     bool tabOpen = false;
+    QMetaObject::Connection historyConnection;
     QString pieceListDir; // Project whose piece list is loaded
     QString unsupportedReason;
     QImage sheetImage;

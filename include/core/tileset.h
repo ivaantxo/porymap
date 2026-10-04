@@ -32,6 +32,22 @@ public:
     QString tilesImagePath;
     QStringList palettePaths;
 
+    // Palette pool (albor, one tileset per layout): the tileset keeps the palettes of
+    // all its maps, as many as MAX_PALS_IN_TILESET, and each map loads only the ones
+    // its metatiles use, up to NUM_PALS_IN_PRIMARY at a time. The palettes are every
+    // palettes/NN.pal in palettesFolder (graphics.h INCBINs them together, from
+    // palettes.gbapal), and each metatile tile's palette is a byte in metatile_palettes.bin.
+    QString metatile_palettes_label;
+    QString metatile_palettes_path;
+    QString palettesFolder;
+    bool usesPalettePool() const { return !this->palettesFolder.isEmpty() && !this->metatile_palettes_path.isEmpty(); }
+    // How many palettes it has, and can have. Without a pool, the project's fixed number.
+    int numPalettes() const;
+    int paletteLimit() const;
+    static QString palettePathInFolder(const QString &folder, int paletteId);
+    // How many palettes a tile can choose from with these tilesets.
+    static int numBlockPalettes(const Tileset *primaryTileset);
+
     QHash<int, QString> metatileLabels;
     QList<QList<QRgb>> palettes;
     QList<QList<QRgb>> palettePreviews;

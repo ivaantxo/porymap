@@ -10,6 +10,12 @@
 // Por debajo las dos usan Compilar, que trocea el arte de los mapas en casillas de
 // 16x16 y saca de ahi los metatiles, los tiles y las paletas, y reescribe el blockdata.
 //
+// Paletas: el tileset guarda las de todos sus mapas, y cada mapa carga solo las que
+// usan sus metatiles (los de sus casillas y su borde), como mucho 15 a la vez. Que
+// paletas carga un mapa no se guarda en ningun sitio: sale de sus metatiles cada vez,
+// asi que no se arrastran de un mapa a otro. Al pintar, un trozo de 8x8 va primero a
+// una paleta que el mapa ya carga.
+//
 // El comportamiento, el nivel y la colision NO salen del arte: se editan aparte, los
 // dos primeros en los atributos del metatile y la colision en el bloque. Por eso cada
 // compilacion parte de lo que habia antes y lo respeta:
@@ -56,18 +62,24 @@ struct Imagen {
 struct Formato {
     int maxTiles = 1008;
     int maxMetatiles = 0x7FFF;
-    int maxPaletas = 15;
+    int maxPaletas = 15;                  // las que carga un mapa a la vez
+    int maxPaletasTileset = 256;          // las que guarda el tileset para todos sus mapas
     uint16_t mascaraId = 0x7FFF;
     uint16_t mascaraColision = 0x8000;
 };
 
 typedef std::array<uint8_t, 64> Tile;        // indices de color 0-15, por filas
 typedef std::array<Color, 16> Paleta;        // la 0 es la transparente
-typedef std::array<uint16_t, 12> Metatile;   // 4 entradas por capa: baja, media, alta
+// 4 entradas por capa: baja, media, alta. Cada entrada lleva el tile (bits 0-9), los
+// volteos (10 horizontal, 11 vertical) y, desde el bit 12, su paleta del tileset.
+typedef std::array<uint32_t, 12> Metatile;
+
+inline int TileDeEntrada(uint32_t e) { return e & 0x3FF; }
+inline int PaletaDeEntrada(uint32_t e) { return e >> 12; }
 
 struct Tileset {
     std::vector<Tile> tiles;
-    std::vector<Paleta> paletas;
+    std::vector<Paleta> paletas;          // todas las de sus mapas
     std::vector<Metatile> metatiles;
     std::vector<uint16_t> atributos;
 };
@@ -100,11 +112,12 @@ struct Estadisticas {
     int tiles = 0;                        // incluido el 0, transparente
     int metatiles = 0;                    // los que existen, sin contar huecos
     int metatilesHuecos = 0;              // numeros libres por debajo del ultimo
-    int paletas = 0;
+    int paletas = 0;                      // las del tileset con algun color en uso
     std::vector<int> coloresPorPaleta;
     int metatilesNuevos = 0;
     int metatilesQuitados = 0;
     std::vector<int> metatilesPorLayout;  // metatiles distintos en cada layout
+    std::vector<int> paletasPorLayout;    // paletas que carga cada layout
 };
 
 struct Salida {
@@ -148,16 +161,24 @@ struct Estampado {
     Resultado resultado = ESTAMPADO;
     std::string mensaje;
     int casillas = 0;                     // casillas del mapa que cambian
-    int metatilesNuevos = 0, tilesNuevos = 0, coloresNuevos = 0;
+    int metatilesNuevos = 0, tilesNuevos = 0, coloresNuevos = 0, paletasNuevas = 0;
+    int paletasMapa = 0;                  // las que carga el mapa despues de estampar
 };
 
 // Estampa `pieza` en la capa `capa` de mapas[objetivo], con su esquina en (x, y) en
 // pixeles, multiplos de 8. Lo que caiga fuera del mapa se ignora. Con `reemplazar`, lo
 // transparente de la pieza borra la capa; sin el, deja lo que hubiera debajo.
 //
-// La casilla cuyo arte cambia pasa a un metatile con ese arte si ya hay uno (el que
-// tenga sus mismos atributos, si puede ser). Si no, se crea en un hueco del tileset
-// con los atributos que tenia la casilla. La colision de la casilla no cambia.
+// La casilla cuyo arte cambia pasa a un metatile con ese arte si ya hay uno y el mapa
+// puede cargar sus paletas (el que tenga sus mismos atributos, si puede ser). Si no,
+// se crea en un hueco del tileset con los atributos que tenia la casilla. La colision
+// de la casilla no cambia.
+//
+// Cada trozo de 8x8 nuevo va, por este orden, a una paleta que el mapa ya carga y
+// tiene todos sus colores; a una del tileset que los tenga, si el mapa puede cargar
+// una mas; a una que el mapa ya carga y tenga sitio para los que faltan; y si el mapa
+// aun puede cargar otra, a una del tileset que tenga parte de los colores o a una
+// nueva.
 //
 // Si algo no cabe no toca nada: ni el tileset ni el mapa.
 Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &mapas, int objetivo,
@@ -166,11 +187,17 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
 
 // Reempaqueta el tileset desde lo que hay pintado en sus mapas: junta metatiles
 // duplicados, quita los que no usa ningun mapa (salvo los fijados) y deja libres los
-// tiles y colores que sobran. Respeta atributos y colision, y sin `compactar` tambien
-// los numeros de lo que sigue. Es lo que libera hueco cuando estampar dice que no cabe.
+// tiles y colores que sobran, y reparte los colores para que cada mapa cargue las
+// menos paletas posibles. Respeta atributos y colision, y sin `compactar` tambien los
+// numeros de lo que sigue. Es lo que libera hueco cuando estampar dice que no cabe.
 bool Optimizar(const Formato &f, const Tileset &ts, const std::vector<MapaDelTileset> &mapas,
                const std::vector<Fijado> &fijados, const std::vector<int> &tilesFijos, bool compactar,
                Salida &salida, std::string &error);
+
+// Las paletas del tileset que carga un mapa, de menor a mayor: las de los metatiles de
+// sus casillas y de su borde. Una entrada usa su paleta si su tile no es el 0.
+std::vector<int> PaletasDelMapa(const Tileset &ts, const std::vector<uint16_t> &bloques,
+                                const std::vector<uint16_t> &borde, uint16_t mascaraId);
 
 // Lo contrario: las tres capas de un metatile, o de un mapa entero, desde el tileset.
 void PintarMetatile(const Tileset &ts, int metatile, Imagen capas[NUM_CAPAS], int x0, int y0);

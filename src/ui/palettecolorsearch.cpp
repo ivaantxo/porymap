@@ -33,7 +33,7 @@ PaletteColorSearch::PaletteColorSearch(Project *project, const Tileset *primaryT
     ui->spinBox_ColorId->setRange(0, Tileset::numColorsPerPalette() - 1);
     connect(ui->spinBox_ColorId, QOverload<int>::of(&QSpinBox::valueChanged), this, &PaletteColorSearch::updateResults);
 
-    ui->spinBox_PaletteId->setRange(0, Project::getNumPalettesTotal() - 1);
+    ui->spinBox_PaletteId->setRange(0, Tileset::numBlockPalettes(primaryTileset) - 1);
     connect(ui->spinBox_PaletteId, QOverload<int>::of(&QSpinBox::valueChanged), this, &PaletteColorSearch::updateResults);
     connect(ui->spinBox_PaletteId, QOverload<int>::of(&QSpinBox::valueChanged), this, &PaletteColorSearch::paletteIdChanged);
 
@@ -73,6 +73,7 @@ int PaletteColorSearch::currentColorId() const {
 void PaletteColorSearch::setTilesets(const Tileset *primaryTileset, const Tileset *secondaryTileset) {
     m_primaryTileset = primaryTileset;
     m_secondaryTileset = secondaryTileset;
+    ui->spinBox_PaletteId->setRange(0, Tileset::numBlockPalettes(primaryTileset) - 1);
     refresh();
 }
 

@@ -140,6 +140,7 @@ void TilesetEditor::setTilesets(QString primaryTilesetLabel, QString secondaryTi
     delete this->secondaryTileset;
     this->primaryTileset = new Tileset(*primaryTileset);
     this->secondaryTileset = new Tileset(*secondaryTileset);
+    ui->spinBox_paletteSelector->setRange(0, Tileset::numBlockPalettes(this->primaryTileset) - 1);
     if (this->paletteEditor) this->paletteEditor->setTilesets(this->primaryTileset, this->secondaryTileset);
     initMetatileHistory();
 }

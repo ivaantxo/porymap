@@ -6,6 +6,8 @@
 #include "imageproviders.h"
 #include "validator.h"
 
+#include <QFile>
+#include <QFileInfo>
 #include <QPainter>
 #include <QImage>
 #include <algorithm>
@@ -22,6 +24,9 @@ Tileset::Tileset(const Tileset &other)
       metatile_attrs_path(other.metatile_attrs_path),
       tilesImagePath(other.tilesImagePath),
       palettePaths(other.palettePaths),
+      metatile_palettes_label(other.metatile_palettes_label),
+      metatile_palettes_path(other.metatile_palettes_path),
+      palettesFolder(other.palettesFolder),
       metatileLabels(other.metatileLabels),
       palettes(other.palettes),
       palettePreviews(other.palettePreviews),
@@ -50,6 +55,9 @@ Tileset &Tileset::operator=(const Tileset &other) {
     tilesImagePath = other.tilesImagePath;
     m_tilesImage = other.m_tilesImage.copy();
     palettePaths = other.palettePaths;
+    metatile_palettes_label = other.metatile_palettes_label;
+    metatile_palettes_path = other.metatile_palettes_path;
+    palettesFolder = other.palettesFolder;
     metatileLabels = other.metatileLabels;
     palettes = other.palettes;
     palettePreviews = other.palettePreviews;
@@ -126,6 +134,9 @@ Tileset* Tileset::getPaletteTileset(int paletteId, Tileset *primaryTileset, Tile
 }
 
 const Tileset* Tileset::getPaletteTileset(int paletteId, const Tileset *primaryTileset, const Tileset *secondaryTileset) {
+    if (Project::usingSingleTileset()) {
+        return (primaryTileset && paletteId >= 0 && paletteId < primaryTileset->numPalettes()) ? primaryTileset : nullptr;
+    }
     if (paletteId < Project::getNumPalettesPrimary()) {
         return primaryTileset;
     } else if (paletteId < Project::getNumPalettesTotal()) {
@@ -267,6 +278,13 @@ bool Tileset::metatileIsValid(uint16_t metatileId, const Tileset *primaryTileset
 QList<QList<QRgb>> Tileset::getBlockPalettes(const Tileset *primaryTileset, const Tileset *secondaryTileset, bool useTruePalettes) {
     QList<QList<QRgb>> palettes;
 
+    // One tileset per layout: all the palettes are its own, as many as it has.
+    if (Project::usingSingleTileset()) {
+        if (primaryTileset)
+            palettes = useTruePalettes ? primaryTileset->palettes : primaryTileset->palettePreviews;
+        return palettes;
+    }
+
     QList<QList<QRgb>> primaryPalettes;
     if (primaryTileset) {
         primaryPalettes = useTruePalettes ? primaryTileset->palettes : primaryTileset->palettePreviews;
@@ -288,7 +306,7 @@ QList<QList<QRgb>> Tileset::getBlockPalettes(const Tileset *primaryTileset, cons
 
 QList<QRgb> Tileset::getPalette(int paletteId, const Tileset *primaryTileset, const Tileset *secondaryTileset, bool useTruePalettes) {
     QList<QRgb> paletteTable;
-    const Tileset *tileset = paletteId < Project::getNumPalettesPrimary()
+    const Tileset *tileset = (Project::usingSingleTileset() || paletteId < Project::getNumPalettesPrimary())
             ? primaryTileset
             : secondaryTileset;
     if (!tileset) {
@@ -339,6 +357,8 @@ bool Tileset::appendToHeaders(const QString &filepath, const QString &friendlyNa
         dataString.append(QString("    .tiles = gTilesetTiles_%1,\n").arg(friendlyName));
         dataString.append(QString("    .palettes = gTilesetPalettes_%1,\n").arg(friendlyName));
         dataString.append(QString("    .metatiles = gMetatiles_%1,\n").arg(friendlyName));
+        if (!this->metatile_palettes_label.isEmpty())
+            dataString.append(QString("    .metatilePalettes = %1,\n").arg(this->metatile_palettes_label));
         dataString.append(QString("    .metatileAttributes = gMetatileAttributes_%1,\n").arg(friendlyName));
         if (projectConfig.tilesetsHaveCallback) dataString.append("    .callback = NULL,\n");
         dataString.append("};\n");
@@ -371,6 +391,13 @@ bool Tileset::appendToGraphics(const QString &filepath, const QString &friendlyN
         dataString.append("\n\t.align 2\n");
         dataString.append(QString("gTilesetTiles_%1::\n").arg(friendlyName));
         dataString.append(QString("\t.incbin \"%1\"\n").arg(tilesPath));
+    } else if (usesPalettePool()) {
+        // All the palettes in one INCBIN, which the project's Makefile puts together from palettes/NN.pal.
+        dataString.append("#pragma GCC diagnostic push\n#pragma GCC diagnostic ignored \"-Wmissing-braces\"\n");
+        dataString.append(QString("const u16 ALIGNED(4) gTilesetPalettes_%1[][%2] = INCBIN_U16(\"%3/palettes%4\");\n")
+                          .arg(friendlyName).arg(Tileset::numColorsPerPalette()).arg(tilesetDir).arg(palettesExt));
+        dataString.append("#pragma GCC diagnostic pop\n");
+        dataString.append(QString("\nconst u32 gTilesetTiles_%1[] = INCBIN_U32(\"%2\");\n").arg(friendlyName, tilesPath));
     } else {
         // Append to C file
         dataString.append(QString("const u16 gTilesetPalettes_%1[][%2] =\n{\n").arg(friendlyName).arg(Tileset::numColorsPerPalette()));
@@ -408,6 +435,8 @@ bool Tileset::appendToMetatiles(const QString &filepath, const QString &friendly
     } else {
         // Append to C file
         dataString.append(QString("const u16 gMetatiles_%1[] = INCBIN_U16(\"%2\");\n").arg(friendlyName, metatilesPath));
+        if (!this->metatile_palettes_label.isEmpty())
+            dataString.append(QString("const u8 %1[] = INCBIN_U8(\"%2/metatile_palettes.bin\");\n").arg(this->metatile_palettes_label, tilesetDir));
         QString numBits = QString::number(projectConfig.metatileAttributesSize * 8);
         dataString.append(QString("const u%1 gMetatileAttributes_%2[] = INCBIN_U%1(\"%3\");\n").arg(numBits, friendlyName, metatileAttrsPath));
     }
@@ -484,6 +513,29 @@ bool Tileset::loadMetatiles() {
         }
         m_metatiles.append(metatile);
     }
+
+    // The whole palette of each tile, past the 4 bits that fit in metatiles.bin.
+    if (!this->metatile_palettes_path.isEmpty()) {
+        QFile palettesFile(this->metatile_palettes_path);
+        const qsizetype expected = static_cast<qsizetype>(m_metatiles.length()) * tilesPerMetatile;
+        if (palettesFile.open(QIODevice::ReadOnly) && palettesFile.size() != expected) {
+            // Out of step with metatiles.bin (regenerated by porytiles, for example): it gets rewritten on save.
+            logWarn(QString("'%1' doesn't match '%2'. Each tile's palette will be its 4 bits in '%2'.")
+                    .arg(this->metatile_palettes_path).arg(this->metatiles_path));
+        } else if (palettesFile.isOpen()) {
+            const QByteArray palettes = palettesFile.readAll();
+            int i = 0;
+            for (Metatile *metatile : m_metatiles)
+                for (Tile &tile : metatile->tiles) {
+                    if (i < palettes.length())
+                        tile.palette = static_cast<unsigned char>(palettes.at(i));
+                    i++;
+                }
+        } else {
+            logWarn(QString("Could not open '%1' for reading: %2. Each tile's palette will be its 4 bits in '%3'.")
+                    .arg(this->metatile_palettes_path).arg(palettesFile.errorString()).arg(this->metatiles_path));
+        }
+    }
     return true;
 }
 
@@ -495,15 +547,26 @@ bool Tileset::saveMetatiles() {
     }
 
     QByteArray data;
+    QByteArray palettes;
     int numTiles = projectConfig.getNumTilesInMetatile();
     for (const auto &metatile : m_metatiles) {
         for (int i = 0; i < numTiles; i++) {
             uint16_t tile = metatile->tiles.value(i).rawValue();
             data.append(static_cast<char>(tile));
             data.append(static_cast<char>(tile >> 8));
+            palettes.append(static_cast<char>(metatile->tiles.value(i).palette));
         }
     }
     file.write(data);
+
+    if (!this->metatile_palettes_path.isEmpty()) {
+        QFile palettesFile(this->metatile_palettes_path);
+        if (!palettesFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            logError(QString("Could not open '%1' for writing: %2").arg(this->metatile_palettes_path).arg(palettesFile.errorString()));
+            return false;
+        }
+        palettesFile.write(palettes);
+    }
     return true;
 }
 
@@ -644,11 +707,40 @@ bool Tileset::saveTilesImage() {
     return true;
 }
 
+int Tileset::numPalettes() const {
+    return usesPalettePool() ? this->palettes.length() : Project::getNumPalettesTotal();
+}
+
+int Tileset::paletteLimit() const {
+    return usesPalettePool() ? Project::getMaxPalettesInTileset() : Project::getNumPalettesTotal();
+}
+
+int Tileset::numBlockPalettes(const Tileset *primaryTileset) {
+    if (Project::usingSingleTileset() && primaryTileset)
+        return qMax(1, primaryTileset->numPalettes());
+    return Project::getNumPalettesTotal();
+}
+
+QString Tileset::palettePathInFolder(const QString &folder, int paletteId) {
+    return QString("%1/%2.pal").arg(folder).arg(paletteId, 2, 10, QLatin1Char('0'));
+}
+
 bool Tileset::loadPalettes() {
     this->palettes.clear();
     this->palettePreviews.clear();
 
-    for (int i = 0; i < Project::getNumPalettesTotal(); i++) {
+    // With a pool, every palettes/NN.pal there is, from 00 on; at least one.
+    int count = Project::getNumPalettesTotal();
+    if (usesPalettePool()) {
+        this->palettePaths.clear();
+        while (this->palettePaths.length() < paletteLimit() && QFileInfo::exists(palettePathInFolder(this->palettesFolder, this->palettePaths.length())))
+            this->palettePaths.append(palettePathInFolder(this->palettesFolder, this->palettePaths.length()));
+        if (this->palettePaths.isEmpty())
+            this->palettePaths.append(palettePathInFolder(this->palettesFolder, 0));
+        count = this->palettePaths.length();
+    }
+
+    for (int i = 0; i < count; i++) {
         QList<QRgb> palette;
         QString path = this->palettePaths.value(i);
         if (!path.isEmpty()) {
@@ -673,6 +765,16 @@ bool Tileset::loadPalettes() {
 
 bool Tileset::savePalettes() {
     bool success = true;
+    if (usesPalettePool()) {
+        // Every palette in the pool, NN.pal in its folder; the ones left over from a
+        // bigger pool go, so that the Makefile doesn't keep putting them together.
+        for (int i = this->palettePaths.length(); i < this->palettes.length(); i++)
+            this->palettePaths.append(palettePathInFolder(this->palettesFolder, i));
+        for (int i = this->palettes.length(); QFileInfo::exists(palettePathInFolder(this->palettesFolder, i)); i++)
+            QFile::remove(palettePathInFolder(this->palettesFolder, i));
+        while (this->palettePaths.length() > this->palettes.length())
+            this->palettePaths.removeLast();
+    }
     int numPalettes = qMin(this->palettePaths.length(), this->palettes.length());
     for (int i = 0; i < numPalettes; i++) {
         if (!PaletteUtil::writeJASC(this->palettePaths.at(i), this->palettes.at(i).toVector(), 0, Tileset::numColorsPerPalette()))

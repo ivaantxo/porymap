@@ -272,6 +272,10 @@ public:
     static int getNumPalettesPrimary(){ return num_pals_primary; }
     static int getNumPalettesTotal() { return num_pals_total; }
     static int getNumPalettesSecondary() { return getNumPalettesTotal() - getNumPalettesPrimary(); }
+    // With one tileset per layout and MAX_PALS_IN_TILESET in fieldmap.h, a tileset with a
+    // palette pool (Tileset::usesPalettePool) can keep this many palettes for all its maps,
+    // and each map loads up to getNumPalettesPrimary() of them.
+    static int getMaxPalettesInTileset() { return max_pals_in_tileset; }
 
     // One tileset per layout: the project's fieldmap.h defines NUM_TILESETS_PER_LAYOUT as 1.
     // Then the primary tileset is the only one: it has all the tiles, metatiles and palettes,
@@ -378,6 +382,7 @@ private:
     static int num_metatiles_primary;
     static int num_pals_primary;
     static int num_pals_total;
+    static int max_pals_in_tileset;
     static bool single_tileset;
 
 signals:

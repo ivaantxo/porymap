@@ -183,6 +183,10 @@ bool PieceStamper::isActive() const {
 }
 
 void PieceStamper::refresh() {
+    // The map's palettes come from its metatiles, so the counter follows every edit.
+    QObject::disconnect(this->historyConnection);
+    if (this->editor->layout)
+        this->historyConnection = connect(&this->editor->layout->editHistory, &QUndoStack::indexChanged, this, &PieceStamper::updateUsage);
     this->unsupportedReason = Stamping::unsupportedReason();
     if (this->pieceListDir != userConfig.projectDir())
         loadPieceList();
@@ -409,7 +413,7 @@ bool PieceStamper::beginStamp(StampJob *job) {
     if (job->target < 0)
         return false;
 
-    job->format = Stamping::format();
+    job->format = Stamping::format(job->tileset);
     job->data = Stamping::fromTileset(job->tileset);
     job->fixedTiles = Stamping::fixedTiles(job->tileset);
     return true;
@@ -429,6 +433,8 @@ bool PieceStamper::addStamp(StampJob &job, const mapeado::Imagen &piece, const Q
     job.total.metatilesNuevos += result.metatilesNuevos;
     job.total.tilesNuevos += result.tilesNuevos;
     job.total.coloresNuevos += result.coloresNuevos;
+    job.total.paletasNuevas += result.paletasNuevas;
+    job.total.paletasMapa = result.paletasMapa;
     return true;
 }
 
@@ -462,9 +468,13 @@ bool PieceStamper::finishStamp(StampJob &job, const std::function<void()> &retry
             this->tilesetEdited();
     }
     updateUsage();
-    setStatus(QString("Estampada en %1 casilla%2: %3 metatiles, %4 tiles y %5 colores nuevos.")
+    QString palettes;
+    if (result.paletasNuevas)
+        palettes = QString(", %1 paleta%2 nueva%2").arg(result.paletasNuevas).arg(result.paletasNuevas == 1 ? "" : "s");
+    setStatus(QString("Estampada en %1 casilla%2: %3 metatiles, %4 tiles y %5 colores nuevos%6. El mapa carga %7 de %8 paletas.")
               .arg(changed).arg(changed == 1 ? "" : "s")
-              .arg(result.metatilesNuevos).arg(result.tilesNuevos).arg(result.coloresNuevos));
+              .arg(result.metatilesNuevos).arg(result.tilesNuevos).arg(result.coloresNuevos).arg(palettes)
+              .arg(result.paletasMapa).arg(job.format.maxPaletas));
     return true;
 }
 
@@ -593,7 +603,8 @@ bool PieceStamper::optimize() {
 
     Message question(QMessageBox::Question, QString("¿Optimizar %1?").arg(tileset->name), QMessageBox::NoButton, this);
     question.setInformativeText(QString("Se reempaqueta desde lo pintado en los mapas que lo usan (%1): se juntan los metatiles "
-                                        "repetidos, se quitan los que no usa nadie y se liberan los tiles y colores que sobran. "
+                                        "repetidos, se quitan los que no usa nadie, se liberan los tiles y colores que sobran "
+                                        "y se reparten los colores para que cada mapa cargue las menos paletas posibles. "
                                         "Los metatiles con nombre y los de los prefabs se quedan siempre en su sitio.\n\n"
                                         "Se guardan el tileset y esos mapas, con lo que tuvieran sin guardar, "
                                         "y su historial de deshacer se vacía.")
@@ -609,7 +620,7 @@ bool PieceStamper::optimize() {
 
     mapeado::Salida out;
     std::string optimizeError;
-    if (!mapeado::Optimizar(Stamping::format(), Stamping::fromTileset(tileset), maps.maps,
+    if (!mapeado::Optimizar(Stamping::format(tileset), Stamping::fromTileset(tileset), maps.maps,
                             Stamping::pinnedMetatiles(tileset), Stamping::fixedTiles(tileset), false, out, optimizeError)) {
         ErrorMessage::show("No se puede optimizar el tileset.", QString::fromStdString(optimizeError), this);
         return false;
@@ -639,8 +650,9 @@ bool PieceStamper::optimize() {
     updateUsage();
 
     const Stamping::Usage after = Stamping::usage(tileset);
-    setStatus(QString("Optimizado: %1 metatiles quitados o juntados, %2 tiles y %3 colores liberados.")
-              .arg(out.est.metatilesQuitados).arg(before.tiles - after.tiles).arg(before.colors - after.colors));
+    setStatus(QString("Optimizado: %1 metatiles quitados o juntados, %2 tiles y %3 colores liberados. El mapa carga %4 de %5 paletas.")
+              .arg(out.est.metatilesQuitados).arg(before.tiles - after.tiles).arg(before.colors - after.colors)
+              .arg(Stamping::mapPalettes(this->editor->layout).length()).arg(Project::getNumPalettesPrimary()));
     if (!saved)
         RecentErrorMessage::show("El tileset se ha optimizado, pero no se ha podido guardar todo.", this);
     return saved;
@@ -668,14 +680,26 @@ void PieceStamper::updateUsage() {
     Stamping::Usage usage = Stamping::usage(tileset);
     auto row = [](const QString &name, int used, int max) {
         QString count = QString("%1 / %2").arg(used).arg(max);
-        if (used >= max) count = QString("<b>%1</b>").arg(count);
+        if (used > max) count = QString("<b><font color=red>%1</font></b>").arg(count);
+        else if (used == max) count = QString("<b>%1</b>").arg(count);
         return QString("<tr><td>%1</td><td align=right>&nbsp;%2</td></tr>").arg(name).arg(count);
     };
-    this->label_Usage->setText(QString("<b>%1</b><table>%2%3%4</table>")
+    // Each map loads only the palettes its metatiles use, as many as the game has room for.
+    const QList<int> mapPalettes = Stamping::mapPalettes(layout);
+    QStringList ids;
+    for (int p : mapPalettes)
+        ids.append(QString::number(p));
+    const int perMap = Project::getNumPalettesPrimary();
+    this->label_Usage->setText(QString("<b>%1</b><table>%2%3%4%5</table>")
         .arg(tileset->name.toHtmlEscaped())
         .arg(row("Tiles", usage.tiles, Project::getNumTilesPrimary()))
-        .arg(row(QString("Paletas (%1 colores)").arg(usage.colors), usage.palettes, Project::getNumPalettesPrimary()))
+        .arg(row("Paletas que carga el mapa", mapPalettes.length(), perMap))
+        .arg(row(QString("Paletas del tileset (%1 colores)").arg(usage.colors), usage.palettes, tileset->paletteLimit()))
         .arg(row("Metatiles", usage.metatiles, Project::getNumMetatilesPrimary())));
+    this->label_Usage->setToolTip(mapPalettes.length() > perMap
+        ? QString("El mapa usa %1 paletas (%2) y el juego solo carga %3: sobran metatiles con paletas distintas.")
+              .arg(mapPalettes.length()).arg(ids.join(", ")).arg(perMap)
+        : QString("Paletas del tileset que carga este mapa: %1.").arg(ids.isEmpty() ? QString("ninguna") : ids.join(", ")));
 }
 
 void PieceStamper::setStatus(const QString &text) {

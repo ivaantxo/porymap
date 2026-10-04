@@ -46,11 +46,11 @@ Tile Voltear(const Tile &t, bool h, bool v)
     return r;
 }
 
-void PintarEntrada(const Tileset &ts, uint16_t entrada, Imagen &img, int x0, int y0)
+void PintarEntrada(const Tileset &ts, uint32_t entrada, Imagen &img, int x0, int y0)
 {
-    int tile = entrada & 0x3FF;
+    int tile = TileDeEntrada(entrada);
     bool h = entrada & 0x400, v = entrada & 0x800;
-    int pal = entrada >> 12;
+    int pal = PaletaDeEntrada(entrada);
     if (tile >= (int)ts.tiles.size())
         return;
     for (int y = 0; y < 8; y++) {
@@ -95,10 +95,13 @@ TileColor TileDeArte(const Arte &a, int capa, int cuarto)
 // Paletas
 //
 // Cada tile necesita que todos sus colores esten en una misma paleta de 15 (la 0 es
-// la transparente). Primero se intenta meter cada tile en una de las paletas de
-// antes, tal cual, para que no se muevan los colores ni los tiles. Lo que no cabe
-// se reparte por los huecos. Si asi no sale, se rehace todo desde cero, y si aun no
-// sale, se busca con vuelta atras.
+// la transparente). El tileset guarda las paletas de todos sus mapas, y cada mapa
+// carga solo las de sus tiles, como mucho maxPaletas a la vez.
+//
+// Compilar reparte los trozos de 8x8 entre las paletas del tileset haciendo que cada
+// mapa cargue las menos posibles. Sin compactar, primero intenta dejar cada trozo en
+// una paleta de antes que ya tenga sus colores, para que no se muevan ni los colores
+// ni los tiles. Si asi no sale, se rehace desde cero, y luego mapa por mapa.
 // ---------------------------------------------------------------------------------
 
 typedef std::vector<Color> Colores; // ordenados, sin repetir
@@ -133,7 +136,13 @@ struct EstadoPaleta {
         return n;
     }
 
-    bool Cabe(const Colores &s) const { return Coste(s) <= Libres(); }
+    bool Tiene(const Colores &s, bool soloUsados) const
+    {
+        for (Color c : s)
+            if (Busca(c, soloUsados) < 0)
+                return false;
+        return true;
+    }
 
     void Anade(const Colores &s)
     {
@@ -158,11 +167,6 @@ struct EstadoPaleta {
     }
 };
 
-bool Subconjunto(const Colores &a, const Colores &b)
-{
-    return std::includes(b.begin(), b.end(), a.begin(), a.end());
-}
-
 bool PorTamano(const Colores &a, const Colores &b)
 {
     if (a.size() != b.size())
@@ -170,129 +174,196 @@ bool PorTamano(const Colores &a, const Colores &b)
     return a < b;
 }
 
-// Mete cada conjunto en la paleta donde menos colores nuevos haga falta.
-bool Voraz(std::vector<EstadoPaleta> &pals, std::vector<Colores> conjuntos)
-{
-    std::sort(conjuntos.begin(), conjuntos.end(), PorTamano);
-    for (const Colores &s : conjuntos) {
-        int mejor = -1, mejorCoste = 99;
-        for (int p = 0; p < (int)pals.size(); p++) {
-            int coste = pals[p].Coste(s);
-            if (coste <= pals[p].Libres() && coste < mejorCoste) {
+// El reparto de los conjuntos de colores de los trozos de 8x8 entre las paletas del
+// tileset, con las que carga cada mapa.
+struct Reparto {
+    const Formato &f;
+    const std::vector<Colores> &conjuntos;
+    const std::vector<std::vector<int>> &mapas; // conjunto -> mapas donde sale
+    std::vector<EstadoPaleta> pals;
+    std::vector<std::vector<bool>> carga;       // paleta -> mapa -> la carga
+    std::vector<int> cargadas;                  // mapa -> cuantas carga
+    std::vector<int> paletaDe;                  // conjunto -> paleta
+    int mapaLleno = -1;                         // el que no dejo colocar un conjunto
+
+    Reparto(const Formato &formato, const std::vector<Colores> &c, const std::vector<std::vector<int>> &m, int numMapas)
+        : f(formato), conjuntos(c), mapas(m), cargadas(numMapas, 0), paletaDe(c.size(), -1)
+    {
+    }
+
+    int NuevaPaleta()
+    {
+        pals.push_back(EstadoPaleta());
+        carga.push_back(std::vector<bool>(cargadas.size(), false));
+        return pals.size() - 1;
+    }
+
+    // Cuantos mapas del conjunto tendrian que cargar la paleta p; -1 si alguno ya no puede.
+    int Cargas(int p, int i)
+    {
+        int n = 0;
+        for (int m : mapas[i]) {
+            if (carga[p][m])
+                continue;
+            if (cargadas[m] >= f.maxPaletas) {
+                mapaLleno = m;
+                return -1;
+            }
+            n++;
+        }
+        return n;
+    }
+
+    void Asigna(int i, int p)
+    {
+        pals[p].Anade(conjuntos[i]);
+        for (int m : mapas[i])
+            if (!carga[p][m]) {
+                carga[p][m] = true;
+                cargadas[m]++;
+            }
+        paletaDe[i] = p;
+    }
+
+    // Donde haga falta cargar menos paletas y, luego, meter menos colores. Entre una
+    // paleta vacia y otra igual de buena, la vacia solo si hay que cargarla de todas
+    // formas: asi no se mezclan colores de mapas que no tienen nada que ver.
+    bool Coloca(int i)
+    {
+        const Colores &s = conjuntos[i];
+        int mejor = -1;
+        std::array<int, 3> mejorCoste = {{0, 0, 0}};
+        bool vaciaVista = false;
+        for (int p = 0; p <= (int)pals.size(); p++) {
+            bool nueva = p == (int)pals.size();
+            if (nueva && (vaciaVista || (int)pals.size() >= f.maxPaletasTileset))
+                break;
+            bool vacia = nueva || pals[p].Vacia();
+            if (vacia && !nueva) {
+                if (vaciaVista)
+                    continue; // las vacias son todas iguales
+                vaciaVista = true;
+            }
+            int colores = nueva ? s.size() : pals[p].Coste(s);
+            if (!nueva && colores > pals[p].Libres())
+                continue;
+            int cargas = nueva ? (int)mapas[i].size() : Cargas(p, i);
+            if (cargas < 0)
+                continue;
+            if (nueva && cargas > 0)
+                for (int m : mapas[i])
+                    if (cargadas[m] >= f.maxPaletas) {
+                        mapaLleno = m;
+                        cargas = -1;
+                        break;
+                    }
+            if (cargas < 0)
+                continue;
+            std::array<int, 3> coste = {{cargas, colores, (cargas > 0) == vacia ? 0 : 1}};
+            if (mejor < 0 || coste < mejorCoste) {
                 mejor = p;
                 mejorCoste = coste;
             }
         }
         if (mejor < 0)
             return false;
-        pals[mejor].Anade(s);
-    }
-    return true;
-}
-
-bool VueltaAtras(std::vector<EstadoPaleta> &pals, const std::vector<Colores> &conjuntos, size_t i, long &nodos)
-{
-    if (i == conjuntos.size())
+        if (mejor == (int)pals.size())
+            NuevaPaleta();
+        Asigna(i, mejor);
         return true;
-    if (--nodos < 0)
-        return false;
-    std::vector<std::pair<int, int>> opciones; // coste, paleta
-    bool vaciaProbada = false;
-    for (int p = 0; p < (int)pals.size(); p++) {
-        if (pals[p].Vacia()) {
-            if (vaciaProbada)
-                continue; // las vacias son todas iguales
-            vaciaProbada = true;
+    }
+
+    // Con las paletas de antes: cada conjunto que ya este entero en una, se queda alli.
+    // Entre varias, la que menos cargas haga y, mejor, una que se usara antes, que una
+    // que no usaba nadie solo tiene colores viejos que coinciden.
+    void Siembra(const std::vector<Paleta> &anteriores, const std::vector<bool> &usadas, std::vector<int> &resto,
+                 const std::vector<int> &orden)
+    {
+        for (size_t p = 0; p < anteriores.size() && (int)p < f.maxPaletasTileset; p++)
+            pals[NuevaPaleta()].color = anteriores[p];
+        for (int i : orden) {
+            int mejor = -1;
+            std::pair<int, bool> mejorCoste;
+            for (int p = 0; p < (int)pals.size(); p++) {
+                if (!pals[p].Tiene(conjuntos[i], false))
+                    continue;
+                int cargas = Cargas(p, i);
+                std::pair<int, bool> coste(cargas, !(p < (int)usadas.size() && usadas[p]));
+                if (cargas >= 0 && (mejor < 0 || coste < mejorCoste)) {
+                    mejor = p;
+                    mejorCoste = coste;
+                }
+            }
+            if (mejor < 0)
+                resto.push_back(i);
+            else
+                Asigna(i, mejor);
         }
-        int coste = pals[p].Coste(conjuntos[i]);
-        if (coste <= pals[p].Libres())
-            opciones.push_back(std::make_pair(coste, p));
     }
-    std::sort(opciones.begin(), opciones.end());
-    for (auto &o : opciones) {
-        EstadoPaleta copia = pals[o.second];
-        pals[o.second].Anade(conjuntos[i]);
-        if (VueltaAtras(pals, conjuntos, i + 1, nodos))
-            return true;
-        pals[o.second] = copia;
+};
+
+// Reparte los conjuntos entre las paletas del tileset sin que ningun mapa pase de
+// f.maxPaletas a la vez. `mapas[i]` son los mapas donde sale conjuntos[i], ordenados.
+// Con `anteriores`, primero intenta respetarlas; `usadas` dice cuales usaba algun metatile.
+bool RepartePaletas(const Formato &f, const std::vector<Colores> &conjuntos, const std::vector<std::vector<int>> &mapas,
+                    int numMapas, const std::vector<Paleta> *anteriores, const std::vector<bool> &usadas,
+                    Reparto &salida)
+{
+    std::vector<int> porTamano(conjuntos.size());
+    for (size_t i = 0; i < conjuntos.size(); i++)
+        porTamano[i] = i;
+    std::sort(porTamano.begin(), porTamano.end(),
+              [&](int a, int b) { return PorTamano(conjuntos[a], conjuntos[b]); });
+
+    // Mapa por mapa, empezando por el que mas colores tiene.
+    std::vector<std::vector<int>> deMapa(numMapas);
+    std::vector<int> sinMapa;
+    for (int i : porTamano) {
+        for (int m : mapas[i])
+            deMapa[m].push_back(i);
+        if (mapas[i].empty())
+            sinMapa.push_back(i);
     }
+    std::vector<int> ordenMapas(numMapas);
+    for (int m = 0; m < numMapas; m++)
+        ordenMapas[m] = m;
+    std::stable_sort(ordenMapas.begin(), ordenMapas.end(),
+                     [&](int a, int b) { return deMapa[a].size() > deMapa[b].size(); });
+    std::vector<int> porMapa;
+    std::vector<bool> puesto(conjuntos.size(), false);
+    for (int m : ordenMapas)
+        for (int i : deMapa[m])
+            if (!puesto[i]) {
+                puesto[i] = true;
+                porMapa.push_back(i);
+            }
+    porMapa.insert(porMapa.end(), sinMapa.begin(), sinMapa.end());
+
+    int mapaLleno = -1;
+    auto intenta = [&](const std::vector<int> &orden, bool sembrar) {
+        Reparto r(f, conjuntos, mapas, numMapas);
+        std::vector<int> resto;
+        if (sembrar)
+            r.Siembra(*anteriores, usadas, resto, orden);
+        else
+            resto = orden;
+        for (int i : resto)
+            if (!r.Coloca(i)) {
+                mapaLleno = r.mapaLleno;
+                return false;
+            }
+        salida.pals = r.pals;
+        salida.carga = r.carga;
+        salida.cargadas = r.cargadas;
+        salida.paletaDe = r.paletaDe;
+        return true;
+    };
+    if (anteriores && intenta(porTamano, true))
+        return true;
+    if (intenta(porTamano, false) || intenta(porMapa, false))
+        return true;
+    salida.mapaLleno = mapaLleno;
     return false;
-}
-
-std::vector<Colores> Maximales(std::vector<Colores> conjuntos)
-{
-    std::sort(conjuntos.begin(), conjuntos.end(), PorTamano);
-    std::vector<Colores> r;
-    for (const Colores &s : conjuntos) {
-        bool dentro = false;
-        for (const Colores &m : r)
-            if (Subconjunto(s, m)) {
-                dentro = true;
-                break;
-            }
-        if (!dentro)
-            r.push_back(s);
-    }
-    return r;
-}
-
-bool Paletas(const std::vector<Colores> &conjuntos, const std::vector<Paleta> &anteriores, int maxPaletas,
-             bool respetarAnteriores, std::vector<EstadoPaleta> &pals)
-{
-    // 1. Con las paletas de antes.
-    if (respetarAnteriores) {
-        pals.assign(maxPaletas, EstadoPaleta());
-        for (int p = 0; p < maxPaletas && p < (int)anteriores.size(); p++)
-            pals[p].color = anteriores[p];
-        std::vector<Colores> resto;
-        for (const Colores &s : conjuntos) {
-            int dentro = -1;
-            for (int p = 0; p < maxPaletas && dentro < 0; p++) {
-                bool todos = true;
-                for (Color c : s)
-                    if (pals[p].Busca(c, false) < 0) {
-                        todos = false;
-                        break;
-                    }
-                if (todos)
-                    dentro = p;
-            }
-            if (dentro < 0) {
-                resto.push_back(s);
-                continue;
-            }
-            for (Color c : s)
-                pals[dentro].usado[pals[dentro].Busca(c, false)] = true;
-        }
-        if (Voraz(pals, resto))
-            return true;
-    }
-
-    // 2. Desde cero.
-    std::vector<Colores> maximales = Maximales(conjuntos);
-    pals.assign(maxPaletas, EstadoPaleta());
-    if (Voraz(pals, maximales))
-        return true;
-
-    // 3. Con vuelta atras.
-    pals.assign(maxPaletas, EstadoPaleta());
-    long nodos = 2000000;
-    return VueltaAtras(pals, maximales, 0, nodos);
-}
-
-int PaletaDe(const std::vector<EstadoPaleta> &pals, const Colores &s)
-{
-    for (int p = 0; p < (int)pals.size(); p++) {
-        bool todos = true;
-        for (Color c : s)
-            if (pals[p].Busca(c, true) < 0) {
-                todos = false;
-                break;
-            }
-        if (todos)
-            return p;
-    }
-    return -1;
 }
 
 // ---------------------------------------------------------------------------------
@@ -572,19 +643,58 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
     }
 
     // --- Paletas ----------------------------------------------------------------------
+    // Cada combinacion de colores, en que mapas sale.
     std::vector<Colores> conjuntos(coloresTile);
     std::sort(conjuntos.begin(), conjuntos.end());
     conjuntos.erase(std::unique(conjuntos.begin(), conjuntos.end()), conjuntos.end());
-    std::vector<EstadoPaleta> pals;
-    if (!Paletas(conjuntos, ant.paletas, f.maxPaletas, !e.compactar, pals)) {
-        std::set<Color> todos;
-        for (auto &c : conjuntos)
-            todos.insert(c.begin(), c.end());
-        error = "Los colores no caben en " + std::to_string(f.maxPaletas) + " paletas de 15: hay " +
-                std::to_string(conjuntos.size()) + " combinaciones distintas de colores en trozos de 8x8 y " +
-                std::to_string(todos.size()) + " colores en total";
+    std::vector<int> conjuntoTile(tilesColor.size());
+    for (size_t i = 0; i < tilesColor.size(); i++)
+        conjuntoTile[i] = std::lower_bound(conjuntos.begin(), conjuntos.end(), coloresTile[i]) - conjuntos.begin();
+    std::vector<std::vector<int>> mapasConjunto(conjuntos.size());
+    for (size_t li = 0; li < e.layouts.size(); li++) {
+        std::set<int> enMapa;
+        for (auto *lista : {&casillas[li], &bordes[li]})
+            for (const Casilla &c : *lista) {
+                int pref;
+                int n = numero[clave(c, &pref)];
+                for (int q = 0; q < 12; q++)
+                    if (usoTiles[n][q] >= 0)
+                        enMapa.insert(conjuntoTile[usoTiles[n][q]]);
+            }
+        for (int k : enMapa)
+            mapasConjunto[k].push_back(li);
+    }
+    std::vector<bool> usadasAntes(ant.paletas.size(), false);
+    for (const Metatile &m : ant.metatiles)
+        for (uint32_t en : m)
+            if (TileDeEntrada(en) != 0 && PaletaDeEntrada(en) < (int)usadasAntes.size())
+                usadasAntes[PaletaDeEntrada(en)] = true;
+    Reparto reparto(f, conjuntos, mapasConjunto, e.layouts.size());
+    if (!RepartePaletas(f, conjuntos, mapasConjunto, e.layouts.size(), e.compactar ? nullptr : &ant.paletas, usadasAntes,
+                        reparto)) {
+        if (reparto.mapaLleno < 0) {
+            std::set<Color> todos;
+            for (auto &c : conjuntos)
+                todos.insert(c.begin(), c.end());
+            error = "Los colores no caben en las " + std::to_string(f.maxPaletasTileset) + " paletas del tileset: hay " +
+                    std::to_string(conjuntos.size()) + " combinaciones distintas de colores en trozos de 8x8 y " +
+                    std::to_string(todos.size()) + " colores en total";
+        } else {
+            int combinaciones = 0;
+            std::set<Color> todos;
+            for (size_t k = 0; k < conjuntos.size(); k++)
+                if (std::binary_search(mapasConjunto[k].begin(), mapasConjunto[k].end(), reparto.mapaLleno)) {
+                    combinaciones++;
+                    todos.insert(conjuntos[k].begin(), conjuntos[k].end());
+                }
+            error = e.layouts[reparto.mapaLleno].nombre + ": sus colores no caben en las " + std::to_string(f.maxPaletas) +
+                    " paletas que carga un mapa: hay " + std::to_string(combinaciones) +
+                    " combinaciones distintas de colores en trozos de 8x8 y " + std::to_string(todos.size()) +
+                    " colores en total";
+        }
         return false;
     }
+    std::vector<EstadoPaleta> &pals = reparto.pals;
 
     // --- Tiles en indices, con volteos ------------------------------------------------
     // Un tile que ya estaba (tal cual o volteado) vuelve a su sitio de antes. Los demas
@@ -627,7 +737,7 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
     std::vector<int> paletaTile(tilesColor.size());
     std::vector<Tile> datosTile(tilesColor.size());
     for (size_t i = 0; i < tilesColor.size(); i++) {
-        int pal = PaletaDe(pals, coloresTile[i]);
+        int pal = reparto.paletaDe[conjuntoTile[i]];
         paletaTile[i] = pal;
         for (int p = 0; p < 64; p++)
             datosTile[i][p] = tilesColor[i][p] == TRANSPARENTE ? 0 : pals[pal].Busca(tilesColor[i][p], true);
@@ -640,7 +750,7 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
             coloca(ia->second.first, ant.tiles[ia->second.first]);
     }
     int siguienteTile = 1;
-    std::vector<uint16_t> entradaTile(tilesColor.size());
+    std::vector<uint32_t> entradaTile(tilesColor.size());
     for (size_t i = 0; i < tilesColor.size(); i++) {
         if (!colocados.count(datosTile[i])) {
             while (siguienteTile < (int)tileOcupado.size() && tileOcupado[siguienteTile])
@@ -648,7 +758,7 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
             coloca(siguienteTile, datosTile[i]);
         }
         std::pair<int, int> sitio = colocados[datosTile[i]];
-        entradaTile[i] = sitio.first | ((sitio.second & 1) << 10) | ((sitio.second >> 1) << 11) | (paletaTile[i] << 12);
+        entradaTile[i] = sitio.first | ((sitio.second & 1) << 10) | ((sitio.second >> 1) << 11) | ((uint32_t)paletaTile[i] << 12);
     }
     if ((int)tiles.size() > f.maxTiles) {
         error = "Hacen falta " + std::to_string(tiles.size()) + " tiles y caben " + std::to_string(f.maxTiles);
@@ -658,7 +768,7 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
     // --- Tileset ----------------------------------------------------------------------
     Tileset &ts = s.tileset;
     ts.tiles = tiles;
-    for (int p = 0; p < f.maxPaletas; p++) {
+    for (size_t p = 0; p < pals.size(); p++) {
         Paleta pal = pals[p].color;
         pal[0] = TRANSPARENTE;
         ts.paletas.push_back(pal);
@@ -692,6 +802,7 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
         s.bloques.push_back(bloques);
         s.bloquesBorde.push_back(borde);
         s.est.metatilesPorLayout.push_back(distintos.size());
+        s.est.paletasPorLayout.push_back(reparto.cargadas[li]);
     }
 
     // --- Cuentas ----------------------------------------------------------------------
@@ -734,11 +845,27 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
 
 namespace {
 
-// El tileset mientras se estampa: lo que hay, que esta en uso y lo que se va metiendo.
+// Las paletas que usa un metatile: las de sus entradas cuyo tile no es el 0.
+std::vector<int> PaletasDeMetatile(const Metatile &m)
+{
+    std::vector<int> r;
+    for (uint32_t e : m)
+        if (TileDeEntrada(e) != 0)
+            r.push_back(PaletaDeEntrada(e));
+    std::sort(r.begin(), r.end());
+    r.erase(std::unique(r.begin(), r.end()), r.end());
+    return r;
+}
+
+// El tileset mientras se estampa: lo que hay, que esta en uso, lo que se va metiendo y
+// que paletas carga el mapa.
 struct Relleno {
     const Formato &f;
     Tileset ts;
     std::vector<EstadoPaleta> pals;
+    std::vector<bool> cargada;                 // paleta -> la carga el mapa
+    int numCargadas = 0;
+    int cargadasAntes = 0;                     // sin lo que mete la pieza
     std::vector<bool> tileUsado;
     std::set<int> tilesFijos;
     std::map<Tile, std::pair<int, int>> tiles; // datos (y volteos) -> tile y volteo
@@ -747,17 +874,18 @@ struct Relleno {
     Relleno(const Formato &formato, const Tileset &t, const std::vector<int> &fijos, Estampado &res)
         : f(formato), ts(t), tilesFijos(fijos.begin(), fijos.end()), r(res)
     {
-        int numPaletas = std::min((int)ts.paletas.size(), f.maxPaletas);
+        int numPaletas = std::min((int)ts.paletas.size(), f.maxPaletasTileset);
         pals.assign(numPaletas, EstadoPaleta());
         for (int p = 0; p < numPaletas; p++)
             pals[p].color = ts.paletas[p];
+        cargada.assign(numPaletas, false);
         tileUsado.assign(ts.tiles.size(), false);
         if (!tileUsado.empty())
             tileUsado[0] = true;
         // Un color esta en uso si algun metatile lo pinta, este o no en un mapa.
         for (const Metatile &m : ts.metatiles) {
-            for (uint16_t e : m) {
-                int t = e & 0x3FF, p = e >> 12;
+            for (uint32_t e : m) {
+                int t = TileDeEntrada(e), p = PaletaDeEntrada(e);
                 if (t >= (int)ts.tiles.size())
                     continue;
                 tileUsado[t] = true;
@@ -779,8 +907,111 @@ struct Relleno {
         return false;
     }
 
+    void Carga(int p)
+    {
+        if (p < (int)cargada.size() && !cargada[p]) {
+            cargada[p] = true;
+            numCargadas++;
+        }
+    }
+
+    // Cuantas de estas paletas tendria que cargar el mapa.
+    int SinCargar(const std::vector<int> &paletas) const
+    {
+        int n = 0;
+        for (int p : paletas)
+            n += p < (int)cargada.size() && !cargada[p];
+        return n;
+    }
+
+    // La paleta con sitio para lo que le falta de `s` que menos colores nuevos necesita,
+    // entre las que carga el mapa o las que no. Con `parte`, solo si ya tiene alguno.
+    int MasParecida(const Colores &s, bool cargadas, bool parte) const
+    {
+        int mejor = -1, mejorCoste = 99;
+        for (int p = 0; p < (int)pals.size(); p++) {
+            if (cargada[p] != cargadas)
+                continue;
+            int coste = pals[p].Coste(s);
+            if (coste <= pals[p].Libres() && coste < mejorCoste && (!parte || coste < (int)s.size())) {
+                mejor = p;
+                mejorCoste = coste;
+            }
+        }
+        return mejor;
+    }
+
+    // La paleta para un trozo de 8x8 con estos colores, cargandola si hace falta.
+    bool ElegirPaleta(const Colores &s, int *paleta)
+    {
+        int n = pals.size(), pal = -1;
+        bool puedeCargar = numCargadas < f.maxPaletas;
+        // 1. Una que el mapa ya carga y tiene todos los colores.
+        for (int p = 0; p < n && pal < 0; p++)
+            if (cargada[p] && pals[p].Tiene(s, true))
+                pal = p;
+        // 2. Una del tileset que los tenga todos, si el mapa puede cargar una mas.
+        for (int p = 0; p < n && pal < 0 && puedeCargar; p++)
+            if (!cargada[p] && pals[p].Tiene(s, true))
+                pal = p;
+        // 3. Una que el mapa ya carga y tiene sitio para los que le faltan.
+        if (pal < 0)
+            pal = MasParecida(s, true, false);
+        // 4. Si el mapa puede cargar otra: una del tileset que ya tenga parte de los
+        //    colores, una que no use nadie, o una nueva.
+        if (pal < 0 && puedeCargar) {
+            pal = MasParecida(s, false, true);
+            for (int p = 0; p < n && pal < 0; p++)
+                if (!cargada[p] && pals[p].Vacia())
+                    pal = p;
+            if (pal < 0 && n < f.maxPaletasTileset) {
+                pals.push_back(EstadoPaleta());
+                Paleta vacia;
+                vacia.fill(0);
+                vacia[0] = TRANSPARENTE;
+                ts.paletas.push_back(vacia);
+                cargada.push_back(false);
+                pal = n;
+            }
+            if (pal < 0)
+                pal = MasParecida(s, false, false);
+            if (pal >= 0 && pals[pal].Vacia())
+                r.paletasNuevas++;
+        }
+        if (pal < 0) {
+            if (!puedeCargar && cargadasAntes < f.maxPaletas)
+                return Falla(SIN_HUECO_PALETAS, "el mapa carga " + std::to_string(cargadasAntes) + " paletas de las " +
+                                                    std::to_string(f.maxPaletas) + " que caben y la pieza necesita mas de " +
+                                                    std::to_string(f.maxPaletas - cargadasAntes) +
+                                                    " nuevas: sus colores no estan en las que ya carga");
+            if (!puedeCargar) {
+                int mejor = -1;
+                for (int p = 0; p < n; p++)
+                    if (cargada[p] && (mejor < 0 || pals[p].Coste(s) - pals[p].Libres() <
+                                                        pals[mejor].Coste(s) - pals[mejor].Libres()))
+                        mejor = p;
+                std::string detalle;
+                if (mejor >= 0)
+                    detalle = ": a la que mas se acerca le faltan " + std::to_string(pals[mejor].Coste(s)) +
+                              " y le quedan " + std::to_string(pals[mejor].Libres()) + " huecos";
+                return Falla(SIN_HUECO_PALETAS, "el mapa ya carga las " + std::to_string(f.maxPaletas) +
+                                                    " paletas que caben y a ninguna le caben los " +
+                                                    std::to_string(s.size()) + " colores de un trozo de 8x8 de la pieza" +
+                                                    detalle);
+            }
+            return Falla(SIN_HUECO_PALETAS, "el tileset ya tiene sus " + std::to_string(f.maxPaletasTileset) +
+                                                " paletas y ninguna tiene sitio para los " + std::to_string(s.size()) +
+                                                " colores de un trozo de 8x8 de la pieza");
+        }
+        r.coloresNuevos += pals[pal].Coste(s);
+        pals[pal].Anade(s);
+        Carga(pal);
+        *paleta = pal;
+        return true;
+    }
+
     // La entrada de metatile para un trozo de 8x8, metiendo lo que falte.
-    bool Entrada(const TileColor &t, uint16_t *entrada)
+    bool Entrada(const TileColor &t, uint32_t *entrada)
     {
         std::set<Color> cs;
         for (Color px : t)
@@ -793,24 +1024,9 @@ struct Relleno {
         if (cs.size() > 15)
             return Falla(DEMASIADOS_COLORES, "un trozo de 8x8 de la pieza tiene " + std::to_string(cs.size()) +
                                                  " colores y una paleta admite 15");
-        Colores s(cs.begin(), cs.end());
-
-        int pal = PaletaDe(pals, s);
-        if (pal < 0) {
-            int mejorCoste = 99;
-            for (int p = 0; p < (int)pals.size(); p++) {
-                int coste = pals[p].Coste(s);
-                if (coste <= pals[p].Libres() && coste < mejorCoste) {
-                    pal = p;
-                    mejorCoste = coste;
-                }
-            }
-            if (pal < 0)
-                return Falla(SIN_HUECO_PALETAS, "no hay hueco en las paletas para " + std::to_string(s.size()) +
-                                                    " colores de un trozo de 8x8 (ninguna tiene sitio para los que le faltan)");
-            r.coloresNuevos += mejorCoste;
-            pals[pal].Anade(s);
-        }
+        int pal;
+        if (!ElegirPaleta(Colores(cs.begin(), cs.end()), &pal))
+            return false;
 
         Tile datos;
         for (int p = 0; p < 64; p++)
@@ -838,7 +1054,8 @@ struct Relleno {
                 tiles[Voltear(datos, v & 1, v & 2)] = std::make_pair(n, v);
             it = tiles.find(datos);
         }
-        *entrada = it->second.first | ((it->second.second & 1) << 10) | ((it->second.second >> 1) << 11) | (pal << 12);
+        *entrada = it->second.first | ((it->second.second & 1) << 10) | ((it->second.second >> 1) << 11) |
+                   ((uint32_t)pal << 12);
         return true;
     }
 
@@ -852,6 +1069,23 @@ struct Relleno {
 };
 
 } // namespace
+
+std::vector<int> PaletasDelMapa(const Tileset &ts, const std::vector<uint16_t> &bloques,
+                                const std::vector<uint16_t> &borde, uint16_t mascaraId)
+{
+    std::vector<bool> visto(ts.metatiles.size(), false);
+    std::set<int> r;
+    for (auto *lista : {&bloques, &borde})
+        for (uint16_t b : *lista) {
+            int m = b & mascaraId;
+            if (m >= (int)ts.metatiles.size() || visto[m])
+                continue;
+            visto[m] = true;
+            for (int p : PaletasDeMetatile(ts.metatiles[m]))
+                r.insert(p);
+        }
+    return std::vector<int>(r.begin(), r.end());
+}
 
 Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &mapas, int objetivo,
                    const Imagen &pieza, int x, int y, Capa capa, bool reemplazar,
@@ -879,11 +1113,14 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
     Relleno rel(f, ts, tilesFijos, r);
     std::vector<uint16_t> bloques = mapa.bloques;
 
-    // Metatiles por arte, y que numeros estan en uso en algun mapa.
+    // Metatiles por arte, sus paletas, y que numeros estan en uso en algun mapa.
     int numMetatiles = std::min(rel.ts.metatiles.size(), rel.ts.atributos.size());
     std::map<Arte, std::vector<int>> porArte;
-    for (int m = 0; m < numMetatiles; m++)
+    std::vector<std::vector<int>> paletasMetatile(numMetatiles);
+    for (int m = 0; m < numMetatiles; m++) {
         porArte[ArteDeMetatile(rel.ts, m)].push_back(m);
+        paletasMetatile[m] = PaletasDeMetatile(rel.ts.metatiles[m]);
+    }
     std::vector<bool> enUso(numMetatiles, false);
     for (const MapaDelTileset &md : mapas)
         for (auto *lista : {&md.bloques, &md.borde})
@@ -892,14 +1129,16 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
                     enUso[b & f.mascaraId] = true;
     auto esHueco = [&](int m) {
         return !enUso[m] && rel.ts.atributos[m] == 0 &&
-               std::all_of(rel.ts.metatiles[m].begin(), rel.ts.metatiles[m].end(), [](uint16_t e) { return e == 0; });
+               std::all_of(rel.ts.metatiles[m].begin(), rel.ts.metatiles[m].end(), [](uint32_t e) { return e == 0; });
     };
 
+    // El arte nuevo de las casillas que cambian.
+    std::vector<std::pair<int, Arte>> cambios;
+    std::vector<bool> cambia(bloques.size(), false);
     for (int cy = y0 / LADO; cy <= (y1 - 1) / LADO; cy++) {
         for (int cx = x0 / LADO; cx <= (x1 - 1) / LADO; cx++) {
             int i = cy * mapa.ancho + cx;
             int antes = bloques[i] & f.mascaraId;
-            uint16_t colision = bloques[i] & f.mascaraColision;
             Arte arte;
             arte.fill(TRANSPARENTE);
             if (antes < numMetatiles)
@@ -915,48 +1154,83 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
                         nuevo[capa * PX_CAPA + py * LADO + px] = c;
                 }
             }
-            if (nuevo == arte)
-                continue;
-
-            uint16_t atributos = antes < numMetatiles ? rel.ts.atributos[antes] : 0;
-            int destino = -1;
-            auto it = porArte.find(nuevo);
-            if (it != porArte.end()) {
-                destino = it->second[0];
-                for (int m : it->second)
-                    if (rel.ts.atributos[m] == atributos) {
-                        destino = m;
-                        break;
-                    }
-            } else {
-                Metatile mt;
-                for (int c = 0; c < NUM_CAPAS; c++)
-                    for (int q = 0; q < 4; q++)
-                        if (!rel.Entrada(TileDeArte(nuevo, c, q), &mt[c * 4 + q]))
-                            return r;
-                for (int m = 0; m < numMetatiles && destino < 0; m++)
-                    if (esHueco(m))
-                        destino = m;
-                if (destino < 0) {
-                    if (numMetatiles >= f.maxMetatiles)
-                        return falla(SIN_HUECO_METATILES, "no hay hueco para metatiles: el tileset ya tiene los " +
-                                                              std::to_string(f.maxMetatiles) + " que caben");
-                    destino = numMetatiles++;
-                    rel.ts.metatiles.resize(numMetatiles);
-                    rel.ts.atributos.resize(numMetatiles);
-                    enUso.push_back(false);
-                }
-                rel.ts.metatiles[destino] = mt;
-                rel.ts.atributos[destino] = atributos;
-                porArte[nuevo].push_back(destino);
-                r.metatilesNuevos++;
+            if (nuevo != arte) {
+                cambios.push_back(std::make_pair(i, nuevo));
+                cambia[i] = true;
             }
-            enUso[destino] = true;
-            bloques[i] = destino | colision;
-            r.casillas++;
         }
     }
 
+    // Las paletas que carga el mapa sin contar lo que se pinta encima.
+    auto cargaMetatile = [&](int m) {
+        if (m < numMetatiles)
+            for (int p : paletasMetatile[m])
+                rel.Carga(p);
+    };
+    for (size_t i = 0; i < bloques.size(); i++)
+        if (!cambia[i])
+            cargaMetatile(bloques[i] & f.mascaraId);
+    for (uint16_t b : mapa.borde)
+        cargaMetatile(b & f.mascaraId);
+    rel.cargadasAntes = rel.numCargadas;
+
+    for (const auto &cambio : cambios) {
+        int i = cambio.first;
+        const Arte &nuevo = cambio.second;
+        int antes = bloques[i] & f.mascaraId;
+        uint16_t colision = bloques[i] & f.mascaraColision;
+        uint16_t atributos = antes < numMetatiles ? rel.ts.atributos[antes] : 0;
+
+        // Uno que ya tenga ese arte y cuyas paletas pueda cargar el mapa: el que menos
+        // haga cargar, y si puede ser con los atributos de la casilla.
+        int destino = -1, mejorCargas = 0;
+        auto it = porArte.find(nuevo);
+        if (it != porArte.end()) {
+            for (int m : it->second) {
+                int cargas = rel.SinCargar(paletasMetatile[m]);
+                if (rel.numCargadas + cargas > f.maxPaletas)
+                    continue;
+                bool mejor = destino < 0 || cargas < mejorCargas ||
+                             (cargas == mejorCargas && rel.ts.atributos[m] == atributos &&
+                              rel.ts.atributos[destino] != atributos);
+                if (mejor) {
+                    destino = m;
+                    mejorCargas = cargas;
+                }
+            }
+        }
+        if (destino < 0) {
+            Metatile mt;
+            for (int c = 0; c < NUM_CAPAS; c++)
+                for (int q = 0; q < 4; q++)
+                    if (!rel.Entrada(TileDeArte(nuevo, c, q), &mt[c * 4 + q]))
+                        return r;
+            for (int m = 0; m < numMetatiles && destino < 0; m++)
+                if (esHueco(m))
+                    destino = m;
+            if (destino < 0) {
+                if (numMetatiles >= f.maxMetatiles)
+                    return falla(SIN_HUECO_METATILES, "no hay hueco para metatiles: el tileset ya tiene los " +
+                                                          std::to_string(f.maxMetatiles) + " que caben");
+                destino = numMetatiles++;
+                rel.ts.metatiles.resize(numMetatiles);
+                rel.ts.atributos.resize(numMetatiles);
+                paletasMetatile.resize(numMetatiles);
+                enUso.push_back(false);
+            }
+            rel.ts.metatiles[destino] = mt;
+            rel.ts.atributos[destino] = atributos;
+            paletasMetatile[destino] = PaletasDeMetatile(mt);
+            porArte[nuevo].push_back(destino);
+            r.metatilesNuevos++;
+        }
+        cargaMetatile(destino);
+        enUso[destino] = true;
+        bloques[i] = destino | colision;
+        r.casillas++;
+    }
+
+    r.paletasMapa = rel.numCargadas;
     rel.Guarda(ts);
     mapa.bloques = bloques;
     return r;

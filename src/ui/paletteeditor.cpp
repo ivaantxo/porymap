@@ -52,7 +52,7 @@ PaletteEditor::PaletteEditor(Project *project, Tileset *primaryTileset, Tileset 
     connect(filter, &ActiveWindowFilter::activated, this, &PaletteEditor::invalidateCache);
     this->installEventFilter(filter);
 
-    this->ui->spinBox_PaletteId->setRange(0, Project::getNumPalettesTotal() - 1);
+    this->ui->spinBox_PaletteId->setRange(0, Tileset::numBlockPalettes(this->primaryTileset) - 1);
     this->ui->spinBox_PaletteId->setValue(paletteId);
     connect(this->ui->spinBox_PaletteId, QOverload<int>::of(&QSpinBox::valueChanged), this, &PaletteEditor::refreshPaletteId);
     connect(this->ui->spinBox_PaletteId, QOverload<int>::of(&QSpinBox::valueChanged), this, &PaletteEditor::changedPalette);
@@ -139,6 +139,7 @@ void PaletteEditor::refreshPaletteId() {
 void PaletteEditor::setTilesets(Tileset *primaryTileset, Tileset *secondaryTileset) {
     this->primaryTileset = primaryTileset;
     this->secondaryTileset = secondaryTileset;
+    this->ui->spinBox_PaletteId->setRange(0, Tileset::numBlockPalettes(this->primaryTileset) - 1);
     invalidateCache();
     if (this->colorSearchWindow) {
         this->colorSearchWindow->setTilesets(primaryTileset, secondaryTileset);

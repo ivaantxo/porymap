@@ -29,6 +29,7 @@ int Project::num_tiles_total = 1024;
 int Project::num_metatiles_primary = 512;
 int Project::num_pals_primary = 6;
 int Project::num_pals_total = 13;
+int Project::max_pals_in_tileset = 16;
 bool Project::single_tileset = false;
 
 Project::Project(QObject *parent) :
@@ -1281,6 +1282,7 @@ Tileset* Project::getTileset(const QString &label, bool forceLoad) {
         tileset->palettes_label = tilesetAttributes.value("palettes");
         tileset->metatiles_label = tilesetAttributes.value("metatiles");
         tileset->metatile_attrs_label = tilesetAttributes.value("metatileAttributes");
+        tileset->metatile_palettes_label = tilesetAttributes.value("metatilePalettes");
     }
 
     if (!loadTilesetAssets(tileset)) {
@@ -1564,6 +1566,24 @@ void Project::readTilesetPaths(Tileset* tileset) {
             tileset->metatile_attrs_path = rootDir + metatileAttrsPath;
         for (const auto &path : palettePaths)
             tileset->palettePaths.append(this->fixPalettePath(rootDir + path));
+
+        // A palette pool, with one tileset per layout: the palettes all together in one
+        // INCBIN of <folder>/palettes.gbapal, made from <folder>/palettes/NN.pal, and each
+        // tile's palette in metatile_palettes.bin.
+        if (usingSingleTileset() && !tileset->metatile_palettes_label.isEmpty()) {
+            const QString metatilePalettesPath = metatileIncbins.value(tileset->metatile_palettes_label);
+            if (!metatilePalettesPath.isEmpty())
+                tileset->metatile_palettes_path = rootDir + metatilePalettesPath;
+            QFile file(rootDir + graphicsFile);
+            if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                const QRegularExpression re(QString(R"(\b%1\s*\[\s*\]\s*\[\s*\d+\s*\]\s*=\s*INCBIN_U16\s*\(\s*"([^"]+)\")").arg(QRegularExpression::escape(tileset->palettes_label)));
+                const QRegularExpressionMatch match = re.match(QString::fromUtf8(file.readAll()));
+                if (match.hasMatch()) {
+                    tileset->palettesFolder = rootDir + QFileInfo(match.captured(1)).path() + "/palettes";
+                    tileset->palettePaths.clear();
+                }
+            }
+        }
     }
 
     // Try to set default paths, if any weren't found by reading the files above
@@ -1608,6 +1628,12 @@ Tileset *Project::createNewTileset(QString name, bool secondary, bool checkerboa
     tileset->tilesImagePath = fullDirectoryPath + "/tiles.png";
     tileset->metatiles_path = fullDirectoryPath + "/metatiles.bin";
     tileset->metatile_attrs_path = fullDirectoryPath + "/metatile_attributes.bin";
+    if (usingSingleTileset() && !this->usingAsmTilesets && getMaxPalettesInTileset() > getNumPalettesTotal()) {
+        // With a palette pool, like the rest of the project's tilesets.
+        tileset->palettesFolder = palettesPath;
+        tileset->metatile_palettes_path = fullDirectoryPath + "/metatile_palettes.bin";
+        tileset->metatile_palettes_label = "gMetatilePalettes_" + Tileset::stripPrefix(name);
+    }
 
     // Set default tiles image
     QImage tilesImage(":/images/blank_tileset.png");
@@ -2364,6 +2390,7 @@ bool Project::readFieldmapProperties() {
     const QString numTilesPerMetatileName = projectConfig.getIdentifier(ProjectIdentifier::define_tiles_per_metatile);
     const QString mapOffsetWidthName = projectConfig.getIdentifier(ProjectIdentifier::define_map_offset_width);
     const QString mapOffsetHeightName = projectConfig.getIdentifier(ProjectIdentifier::define_map_offset_height);
+    const QString maxPalsInTilesetName = QStringLiteral("MAX_PALS_IN_TILESET");
 
     const QString filename = projectConfig.getFilePath(ProjectFilePath::constants_fieldmap);
     watchFile(filename);
@@ -2377,6 +2404,7 @@ bool Project::readFieldmapProperties() {
                                                                numTilesPerMetatileName,
                                                                mapOffsetWidthName,
                                                                mapOffsetHeightName,
+                                                               maxPalsInTilesetName,
     });
 
     auto loadDefine = [defines](const QString name, int * dest, int min, int max) {
@@ -2402,6 +2430,10 @@ bool Project::readFieldmapProperties() {
         loadDefine(numTilesPrimaryName, &Project::num_tiles_primary, 1, 1024);
         Project::num_pals_total = Project::num_pals_primary;
         Project::num_tiles_total = Project::num_tiles_primary;
+        // The palette pool: each tile's palette is a byte.
+        Project::max_pals_in_tileset = Project::num_pals_total;
+        if (defines.contains(maxPalsInTilesetName))
+            loadDefine(maxPalsInTilesetName, &Project::max_pals_in_tileset, Project::num_pals_total, 256);
     } else {
         loadDefine(numPalsTotalName,        &Project::num_pals_total, 2, Tileset::maxPalettes());
         loadDefine(numTilesTotalName,       &Project::num_tiles_total, 2, 1024); // 1024 is fixed because we store tile IDs in a 10-bit field.
