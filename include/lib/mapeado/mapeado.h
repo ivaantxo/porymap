@@ -237,6 +237,12 @@ Estampado Animar(const Formato &f, Tileset &ts, const std::vector<MapaDelTileset
 // Quita la animacion: sus tiles se quedan con el fotograma 0, ya sin animar.
 bool QuitarAnimacion(Tileset &ts, const std::string &nombre);
 
+// Mete todo `origen` en `destino`, detras de lo suyo: tiles, paletas, metatiles con sus
+// atributos y animaciones. Los metatiles de origen pasan a ser los desde *primerMetatile:
+// eso hay que sumar a los bloques de sus mapas. Lo repetido se junta luego al optimizar.
+// Si no cabe, o se repite el nombre de una animacion, no toca nada.
+bool Juntar(const Formato &f, Tileset &destino, const Tileset &origen, int *primerMetatile, std::string &error);
+
 // Las animaciones como van en animations.bin, que lee el juego (src/tileset_anims.c):
 // una ficha de 32 bytes por animacion, una a cero al final, y detras los fotogramas. La
 // ficha: tile (u16), tiles (u16), fotogramas (u16), cada (u16), donde empiezan sus

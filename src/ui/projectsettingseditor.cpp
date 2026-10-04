@@ -110,6 +110,8 @@ void ProjectSettingsEditor::initUi() {
         ui->comboBox_DefaultSecondaryTileset->addItems(project->secondaryTilesetLabels);
         ui->label_SecondaryTileset->setVisible(!Project::usingSingleTileset());
         ui->comboBox_DefaultSecondaryTileset->setVisible(!Project::usingSingleTileset());
+        ui->label_PrimaryTileset->setVisible(!project->hasOnlyOneTileset());
+        ui->comboBox_DefaultPrimaryTileset->setVisible(!project->hasOnlyOneTileset());
         ui->comboBox_IconSpecies->addItems(project->speciesNames);
         ui->comboBox_WarpBehaviors->addItems(project->metatileBehaviorMap.keys());
     }

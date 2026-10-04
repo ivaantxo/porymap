@@ -40,7 +40,9 @@ Si el `fieldmap.h` del proyecto define `NUM_TILESETS_PER_LAYOUT` como 1, porymap
 - el primario es el único: tiene todos los tiles, metatiles y paletas (`NUM_TILES_IN_PRIMARY`, `NUM_METATILES_IN_PRIMARY` y `NUM_PALS_IN_PRIMARY`, que pueden llegar a 1024, a lo que dejen las máscaras del bloque y a 16; con paletas por mapa, `NUM_PALS_IN_PRIMARY` son las que carga cada mapa);
 - no se carga ningún secundario, ni sus paletas; los `NUM_*_TOTAL` no se usan;
 - desaparece el secundario de la interfaz: panel del layout, nuevo layout, nuevo tileset, configuración del proyecto y, en el editor de tilesets, los menús de importar y exportar, *Change Number of Metatiles* y *Export Metatiles Image*;
-- `layouts.json` se guarda sin `secondary_tileset`.
+- `layouts.json` se guarda sin `secondary_tileset`;
+- si además el proyecto tiene un solo tileset, como albor, tampoco hay nada que elegir: desaparece el selector de tileset del panel del mapa, del diálogo de mapa nuevo y de la configuración del proyecto;
+- un mapa nuevo no se crea con metatiles que el tileset no tiene (como el borde por defecto de pokeemerald, `0x1D4`…, que en el juego saldría con basura): esos pasan a ser el metatile de relleno, o el 0.
 
 ### Paletas por mapa
 

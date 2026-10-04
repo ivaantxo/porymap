@@ -38,6 +38,7 @@ void NewLayoutForm::initUi(Project *project) {
         ui->label_SecondaryTileset->setVisible(!Project::usingSingleTileset());
         ui->comboBox_SecondaryTileset->setVisible(!Project::usingSingleTileset());
         ui->label_PrimaryTileset->setText(Project::usingSingleTileset() ? QStringLiteral("Tileset") : QStringLiteral("Primary Tileset"));
+        ui->groupBox_Tilesets->setVisible(!m_project->hasOnlyOneTileset());
 
         ui->spinBox_MapWidth->setMaximum(m_project->getMaxMapWidth());
         ui->spinBox_MapHeight->setMaximum(m_project->getMaxMapHeight());

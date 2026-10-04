@@ -595,6 +595,8 @@ Layout *Project::createNewLayout(const Layout::Settings &settings, const Layout 
         delete layout;
         return nullptr;
     }
+    if (!toDuplicate)
+        fixNewLayoutMetatiles(layout);
 
     this->mapLayouts.insert(layout->id, layout);
     this->orderedLayoutIds.append(layout->id);
@@ -1306,6 +1308,23 @@ void Project::setNewLayoutBlockdata(Layout *layout) {
     }
     layout->lastCommitBlocks.blocks = layout->blockdata;
     layout->lastCommitBlocks.layoutDimensions = QSize(width, height);
+}
+
+// With one tileset per layout, the default metatiles (pokeemerald's numbers, like the border's
+// 0x1D4) may be past the end of the tileset, and the game would draw garbage there. Those
+// become the default fill metatile, or 0 if that one isn't in the tileset either.
+void Project::fixNewLayoutMetatiles(Layout *layout) {
+    const Tileset *tileset = layout->tileset_primary;
+    if (!usingSingleTileset() || !tileset || tileset->numMetatiles() == 0)
+        return;
+    const int count = tileset->numMetatiles();
+    const uint16_t fallback = projectConfig.defaultMetatileId < count ? projectConfig.defaultMetatileId : 0;
+    for (Blockdata *blocks : {&layout->blockdata, &layout->border})
+        for (Block &block : *blocks)
+            if (block.metatileId() >= count)
+                block.setMetatileId(fallback);
+    layout->lastCommitBlocks.blocks = layout->blockdata;
+    layout->lastCommitBlocks.border = layout->border;
 }
 
 void Project::setNewLayoutBorder(Layout *layout) {

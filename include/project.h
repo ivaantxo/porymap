@@ -281,6 +281,8 @@ public:
     // Then the primary tileset is the only one: it has all the tiles, metatiles and palettes,
     // and the secondary is an empty placeholder that is never loaded (its label is empty).
     static bool usingSingleTileset() { return single_tileset; }
+    // A single tileset per layout, and only one in the whole project: nothing to choose.
+    bool hasOnlyOneTileset() const { return usingSingleTileset() && this->primaryTilesetLabels.size() <= 1; }
     static QString getEmptyMapsecName();
     static QString getMapGroupPrefix();
 
@@ -352,6 +354,7 @@ private:
 
     void setNewLayoutBlockdata(Layout *layout);
     void setNewLayoutBorder(Layout *layout);
+    void fixNewLayoutMetatiles(Layout *layout);
 
     void ignoreWatchedFileTemporarily(const QString &filepath);
     void ignoreWatchedFilesTemporarily(const QStringList &filepaths);

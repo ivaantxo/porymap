@@ -1886,6 +1886,53 @@ bool QuitarAnimacion(Tileset &ts, const std::string &nombre)
     return false;
 }
 
+bool Juntar(const Formato &f, Tileset &destino, const Tileset &origen, int *primerMetatile, std::string &error)
+{
+    const int tiles = destino.tiles.size(), paletas = destino.paletas.size(), metatiles = destino.metatiles.size();
+    if (tiles + origen.tiles.size() > (size_t)f.maxTiles) {
+        error = "no caben los tiles: " + std::to_string(tiles) + " + " + std::to_string(origen.tiles.size()) +
+                " de " + std::to_string(f.maxTiles);
+        return false;
+    }
+    if (paletas + origen.paletas.size() > (size_t)f.maxPaletasTileset) {
+        error = "no caben las paletas: " + std::to_string(paletas) + " + " + std::to_string(origen.paletas.size()) +
+                " de " + std::to_string(f.maxPaletasTileset);
+        return false;
+    }
+    if (metatiles + origen.metatiles.size() > (size_t)f.maxMetatiles) {
+        error = "no caben los metatiles: " + std::to_string(metatiles) + " + " +
+                std::to_string(origen.metatiles.size()) + " de " + std::to_string(f.maxMetatiles);
+        return false;
+    }
+    for (const Animacion &a : origen.animaciones)
+        for (const Animacion &b : destino.animaciones)
+            if (a.nombre == b.nombre) {
+                error = "los dos tienen una animacion que se llama " + a.nombre;
+                return false;
+            }
+
+    destino.atributos.resize(metatiles, 0);
+    destino.tiles.insert(destino.tiles.end(), origen.tiles.begin(), origen.tiles.end());
+    destino.paletas.insert(destino.paletas.end(), origen.paletas.begin(), origen.paletas.end());
+    for (size_t m = 0; m < origen.metatiles.size(); m++) {
+        Metatile nuevo = origen.metatiles[m];
+        for (uint32_t &e : nuevo) {
+            // El tile 0 es el transparente de los dos.
+            int t = TileDeEntrada(e);
+            e = (e & 0xC00) | (t ? t + tiles : 0) | (uint32_t)(PaletaDeEntrada(e) + paletas) << 12;
+        }
+        destino.metatiles.push_back(nuevo);
+        destino.atributos.push_back(m < origen.atributos.size() ? origen.atributos[m] : 0);
+    }
+    for (Animacion a : origen.animaciones) {
+        a.tile += tiles;
+        a.paleta += paletas;
+        destino.animaciones.push_back(a);
+    }
+    *primerMetatile = metatiles;
+    return true;
+}
+
 bool Optimizar(const Formato &f, const Tileset &ts, const std::vector<MapaDelTileset> &mapas,
                const std::vector<Fijado> &fijados, const std::vector<int> &tilesFijos, bool compactar,
                Salida &salida, std::string &error)
