@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <map>
 #include <set>
+#include <tuple>
 
 namespace mapeado {
 
@@ -320,21 +321,22 @@ struct Reparto {
     }
 
     // Con las paletas de antes: cada conjunto que ya este entero en una, se queda alli.
-    // Entre varias, la que menos cargas haga y, mejor, una que se usara antes, que una
-    // que no usaba nadie solo tiene colores viejos que coinciden.
-    void Siembra(const std::vector<Paleta> &anteriores, const std::vector<bool> &usadas, std::vector<int> &resto,
-                 const std::vector<int> &orden)
+    // Entre varias, la que menos cargas haga y, mejor, la suya de antes (asi no se mezclan
+    // las filas de una pieza con sus paletas) o una que se usara antes, que una que no
+    // usaba nadie solo tiene colores viejos que coinciden.
+    void Siembra(const std::vector<Paleta> &anteriores, const std::vector<bool> &usadas,
+                 const std::vector<int> &preferidas, std::vector<int> &resto, const std::vector<int> &orden)
     {
         for (size_t p = 0; p < anteriores.size() && (int)p < f.maxPaletasTileset; p++)
             pals[NuevaPaleta()].color = anteriores[p];
         for (int i : orden) {
             int mejor = -1;
-            std::pair<int, bool> mejorCoste;
+            std::tuple<int, bool, bool> mejorCoste;
             for (int p = 0; p < (int)pals.size(); p++) {
                 if (!pals[p].Tiene(conjuntos[i], false))
                     continue;
                 int cargas = Cargas(p, i);
-                std::pair<int, bool> coste(cargas, !(p < (int)usadas.size() && usadas[p]));
+                std::tuple<int, bool, bool> coste(cargas, preferidas[i] != p, !(p < (int)usadas.size() && usadas[p]));
                 if (cargas >= 0 && (mejor < 0 || coste < mejorCoste)) {
                     mejor = p;
                     mejorCoste = coste;
@@ -350,10 +352,11 @@ struct Reparto {
 
 // Reparte los conjuntos entre las paletas del tileset sin que ningun mapa pase de
 // f.maxPaletas a la vez. `mapas[i]` son los mapas donde sale conjuntos[i], ordenados.
-// Con `anteriores`, primero intenta respetarlas; `usadas` dice cuales usaba algun metatile.
+// Con `anteriores`, primero intenta respetarlas; `usadas` dice cuales usaba algun metatile
+// y `preferidas`, la paleta donde estaba antes cada conjunto (o -1).
 bool RepartePaletas(const Formato &f, const std::vector<Colores> &conjuntos, const std::vector<std::vector<int>> &mapas,
                     int numMapas, const std::vector<Paleta> *anteriores, const std::vector<bool> &usadas,
-                    Reparto &salida)
+                    const std::vector<int> &preferidas, Reparto &salida)
 {
     std::vector<int> porTamano(conjuntos.size());
     for (size_t i = 0; i < conjuntos.size(); i++)
@@ -390,7 +393,7 @@ bool RepartePaletas(const Formato &f, const std::vector<Colores> &conjuntos, con
         Reparto r(f, conjuntos, mapas, numMapas);
         std::vector<int> resto;
         if (sembrar)
-            r.Siembra(*anteriores, usadas, resto, orden);
+            r.Siembra(*anteriores, usadas, preferidas, resto, orden);
         else
             resto = orden;
         for (int i : resto)
@@ -750,9 +753,26 @@ bool Compilar(const Entrada &e, Salida &s, std::string &error)
         for (uint32_t en : m)
             if (TileDeEntrada(en) != 0 && PaletaDeEntrada(en) < (int)usadasAntes.size())
                 usadasAntes[PaletaDeEntrada(en)] = true;
+    // La paleta donde estaba antes cada combinacion: la del primer trozo con esos colores.
+    std::map<TileColor, int> paletaDeTrozo;
+    for (const Metatile &m : ant.metatiles)
+        for (uint32_t en : m) {
+            int t = TileDeEntrada(en), p = PaletaDeEntrada(en);
+            if (t != 0 && t < (int)ant.tiles.size() && p < (int)ant.paletas.size())
+                paletaDeTrozo.insert(std::make_pair(ColoresDeTile(Voltear(ant.tiles[t], en & 0x400, en & 0x800), ant, p), p));
+        }
+    std::vector<int> preferidas(conjuntos.size(), -1);
+    for (size_t i = 0; i < tilesColor.size(); i++) {
+        auto it = paletaDeTrozo.find(tilesColor[i]);
+        if (it != paletaDeTrozo.end() && preferidas[conjuntoTile[i]] < 0)
+            preferidas[conjuntoTile[i]] = it->second;
+    }
+    for (size_t a = 0; a < ant.animaciones.size(); a++)
+        if (conjuntoAnim[a] >= 0)
+            preferidas[conjuntoAnim[a]] = ant.animaciones[a].paleta;
     Reparto reparto(f, conjuntos, mapasConjunto, e.layouts.size());
     if (!RepartePaletas(f, conjuntos, mapasConjunto, e.layouts.size(), e.compactar ? nullptr : &ant.paletas, usadasAntes,
-                        reparto)) {
+                        preferidas, reparto)) {
         if (reparto.mapaLleno < 0) {
             std::set<Color> todos;
             for (auto &c : conjuntos)
@@ -1141,7 +1161,10 @@ struct Relleno {
     }
 
     // La entrada de metatile para un trozo de 8x8, metiendo lo que falte.
-    bool Entrada(const TileColor &t, uint32_t *entrada)
+    // Con `fila`, el trozo es de una pieza con sus paletas: esa fila de su paleta (la
+    // numero `numFila`), y los indices que tiene en la imagen (0 donde no es de la pieza).
+    bool Entrada(const TileColor &t, uint32_t *entrada, const Paleta *fila = nullptr, const Tile *indicesFila = nullptr,
+                 int numFila = 0)
     {
         std::set<Color> cs;
         for (Color px : t)
@@ -1166,13 +1189,126 @@ struct Relleno {
         if (cs.size() > 15)
             return Falla(DEMASIADOS_COLORES, "un trozo de 8x8 de la pieza tiene " + std::to_string(cs.size()) +
                                                  " colores y una paleta admite 15");
+
+        // Con la fila de la paleta de la imagen: si todos sus colores son de esa fila, va a
+        // una paleta que tenga la fila, con los indices de la imagen.
+        if (fila) {
+            Tile datos;
+            std::set<int> usados;
+            bool enFila = true;
+            for (int p = 0; p < 64 && enFila; p++) {
+                if (t[p] == TRANSPARENTE) {
+                    datos[p] = 0;
+                    continue;
+                }
+                int i = indicesFila ? (*indicesFila)[p] : 0;
+                if (i == 0 || ((*fila)[i] & 0x7FFF) != t[p])
+                    for (i = 1; i < 16 && ((*fila)[i] & 0x7FFF) != t[p]; i++)
+                        ;
+                enFila = i < 16;
+                datos[p] = i;
+                usados.insert(i);
+            }
+            if (enFila) {
+                int pal;
+                if (!PaletaDeFila(*fila, usados, numFila, &pal))
+                    return false;
+                return EntradaDeDatos(datos, pal, entrada);
+            }
+        }
+
         int pal;
         if (!ElegirPaleta(Colores(cs.begin(), cs.end()), &pal))
             return false;
-
         Tile datos;
         for (int p = 0; p < 64; p++)
             datos[p] = t[p] == TRANSPARENTE ? 0 : pals[pal].Busca(t[p], true);
+        return EntradaDeDatos(datos, pal, entrada);
+    }
+
+    // La paleta para una fila de la paleta de una imagen, de la que se usan esos indices:
+    // una que ya tenga sus colores en esos indices (la que mas se parezca a la fila,
+    // primero entre las que carga el mapa); si no, una que no use nadie o una nueva, con
+    // la fila entera; si no, una con esos huecos libres. La carga si hace falta.
+    bool PaletaDeFila(const Paleta &fila, const std::set<int> &usados, int numFila, int *paleta)
+    {
+        auto color = [&](int i) { return (Color)(fila[i] & 0x7FFF); };
+        auto exacta = [&](int p) {
+            for (int i : usados)
+                if (pals[p].color[i] != color(i))
+                    return false;
+            return true;
+        };
+        auto compatible = [&](int p) {
+            for (int i : usados)
+                if (pals[p].usado[i] && pals[p].color[i] != color(i))
+                    return false;
+            return true;
+        };
+        auto parecido = [&](int p) {
+            int n = 0;
+            for (int i = 1; i < 16; i++)
+                n += pals[p].color[i] == color(i);
+            return n;
+        };
+        const bool puedeCargar = numCargadas < f.maxPaletas;
+        auto mejor = [&](auto vale, bool cargadas) {
+            int r = -1;
+            for (int p = 0; p < (int)pals.size(); p++)
+                if (cargada[p] == cargadas && vale(p) && (r < 0 || parecido(p) > parecido(r)))
+                    r = p;
+            return r;
+        };
+        int pal = mejor(exacta, true);
+        if (pal < 0 && puedeCargar)
+            pal = mejor(exacta, false);
+        bool nueva = false;
+        if (pal < 0 && puedeCargar) {
+            for (int p = 0; p < (int)pals.size() && pal < 0; p++)
+                if (!cargada[p] && pals[p].Vacia())
+                    pal = p;
+            if (pal < 0 && (int)pals.size() < f.maxPaletasTileset) {
+                pal = pals.size();
+                pals.push_back(EstadoPaleta());
+                Paleta vacia;
+                vacia.fill(0);
+                vacia[0] = TRANSPARENTE;
+                ts.paletas.push_back(vacia);
+                cargada.push_back(false);
+            }
+            nueva = pal >= 0;
+        }
+        if (pal < 0)
+            pal = mejor(compatible, true);
+        if (pal < 0 && puedeCargar)
+            pal = mejor(compatible, false);
+        if (pal < 0) {
+            std::string cual = "la fila " + std::to_string(numFila) + " de la paleta de la pieza";
+            if (!puedeCargar)
+                return Falla(SIN_HUECO_PALETAS, "el mapa ya carga las " + std::to_string(f.maxPaletas) +
+                                                    " paletas que caben y " + cual + " necesita la suya");
+            return Falla(SIN_HUECO_PALETAS, "el tileset ya tiene sus " + std::to_string(f.maxPaletasTileset) +
+                                                " paletas y ninguna tiene sitio para " + cual);
+        }
+        if (nueva) {
+            r.paletasNuevas++;
+            for (int i = 1; i < 16; i++)
+                pals[pal].color[i] = color(i);
+        }
+        for (int i : usados) {
+            if (!pals[pal].usado[i])
+                r.coloresNuevos++;
+            pals[pal].color[i] = color(i);
+            pals[pal].usado[i] = true;
+        }
+        Carga(pal);
+        *paleta = pal;
+        return true;
+    }
+
+    // La entrada para un tile con estos indices y esta paleta, metiendolo si no esta.
+    bool EntradaDeDatos(const Tile &datos, int pal, uint32_t *entrada)
+    {
         auto it = tiles.find(datos);
         if (it == tiles.end()) {
             int n = -1;
@@ -1211,6 +1347,36 @@ struct Relleno {
 };
 
 } // namespace
+
+bool PiezaConPaletas(const Imagen &pieza, std::string *motivo)
+{
+    auto no = [&](const std::string &m) {
+        if (motivo)
+            *motivo = m;
+        return false;
+    };
+    if (pieza.filas.empty() || pieza.indices.size() != pieza.px.size())
+        return no("no es un PNG con paleta");
+    for (int ty = 0; ty < pieza.alto / 8; ty++)
+        for (int tx = 0; tx < pieza.ancho / 8; tx++) {
+            int fila = -1;
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) {
+                    int i = pieza.indices[(ty * 8 + y) * pieza.ancho + tx * 8 + x];
+                    if (i % 16 == 0)
+                        continue;
+                    if (i / 16 >= (int)pieza.filas.size())
+                        return no("usa el color " + std::to_string(i) + " y la paleta tiene " +
+                                  std::to_string(pieza.filas.size() * 16));
+                    if (fila >= 0 && fila != i / 16)
+                        return no("el trozo de 8x8 en (" + std::to_string(tx * 8) + ", " + std::to_string(ty * 8) +
+                                  ") mezcla colores de las filas " + std::to_string(fila) + " y " +
+                                  std::to_string(i / 16) + " de la paleta");
+                    fila = i / 16;
+                }
+        }
+    return true;
+}
 
 std::vector<int> PaletasDelMapa(const Tileset &ts, const std::vector<uint16_t> &bloques,
                                 const std::vector<uint16_t> &borde, uint16_t mascaraId)
@@ -1252,6 +1418,14 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
     if (x0 >= x1 || y0 >= y1)
         return falla(PIEZA_NO_VALIDA, "la pieza cae fuera del mapa");
 
+    // Una pieza con sus paletas: el color 0 de cada fila es transparente.
+    Imagen pz = pieza;
+    r.paletasDeLaPieza = PiezaConPaletas(pieza, nullptr);
+    if (r.paletasDeLaPieza)
+        for (size_t i = 0; i < pz.px.size(); i++)
+            if (pz.indices[i] % 16 == 0)
+                pz.px[i] = TRANSPARENTE;
+
     Relleno rel(f, ts, tilesFijos, r);
     std::vector<uint16_t> bloques = mapa.bloques;
 
@@ -1274,8 +1448,15 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
                std::all_of(rel.ts.metatiles[m].begin(), rel.ts.metatiles[m].end(), [](uint32_t e) { return e == 0; });
     };
 
-    // El arte nuevo de las casillas que cambian.
-    std::vector<std::pair<int, Arte>> cambios;
+    // El arte nuevo de las casillas que cambian y, con las paletas de la pieza, la fila y
+    // los indices de cada cuarto de la capa donde se estampa.
+    struct Cambio {
+        int i;
+        Arte nuevo;
+        std::array<int, 4> fila;
+        std::array<Tile, 4> indices;
+    };
+    std::vector<Cambio> cambios;
     std::vector<bool> cambia(bloques.size(), false);
     for (int cy = y0 / LADO; cy <= (y1 - 1) / LADO; cy++) {
         for (int cx = x0 / LADO; cx <= (x1 - 1) / LADO; cx++) {
@@ -1285,19 +1466,30 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
             arte.fill(TRANSPARENTE);
             if (antes < numMetatiles)
                 arte = ArteDeMetatile(rel.ts, antes);
-            Arte nuevo = arte;
+            Cambio cambio;
+            cambio.i = i;
+            cambio.nuevo = arte;
+            cambio.fila.fill(-1);
+            for (Tile &t : cambio.indices)
+                t.fill(0);
             for (int py = 0; py < LADO; py++) {
                 for (int px = 0; px < LADO; px++) {
                     int mx = cx * LADO + px, my = cy * LADO + py;
                     if (mx < x0 || mx >= x1 || my < y0 || my >= y1)
                         continue;
-                    Color c = pieza.en(mx - x, my - y);
+                    Color c = pz.en(mx - x, my - y);
                     if (c != TRANSPARENTE || reemplazar)
-                        nuevo[capa * PX_CAPA + py * LADO + px] = c;
+                        cambio.nuevo[capa * PX_CAPA + py * LADO + px] = c;
+                    if (r.paletasDeLaPieza && c != TRANSPARENTE) {
+                        int indice = pz.indices[(my - y) * pz.ancho + (mx - x)];
+                        int q = (py / 8) * 2 + px / 8;
+                        cambio.fila[q] = indice / 16;
+                        cambio.indices[q][(py % 8) * 8 + px % 8] = indice % 16;
+                    }
                 }
             }
-            if (nuevo != arte) {
-                cambios.push_back(std::make_pair(i, nuevo));
+            if (cambio.nuevo != arte) {
+                cambios.push_back(cambio);
                 cambia[i] = true;
             }
         }
@@ -1316,9 +1508,9 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
         cargaMetatile(b & f.mascaraId);
     rel.cargadasAntes = rel.numCargadas;
 
-    for (const auto &cambio : cambios) {
-        int i = cambio.first;
-        const Arte &nuevo = cambio.second;
+    for (const Cambio &cambio : cambios) {
+        int i = cambio.i;
+        const Arte &nuevo = cambio.nuevo;
         int antes = bloques[i] & f.mascaraId;
         uint16_t colision = bloques[i] & f.mascaraColision;
         uint16_t atributos = antes < numMetatiles ? rel.ts.atributos[antes] : 0;
@@ -1341,11 +1533,26 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
                 }
             return true;
         };
+        // Con las paletas de la pieza, tiene que usar paletas con los colores de sus filas
+        // en sus indices.
+        auto respetaFilas = [&](int m) {
+            for (int q = 0; q < 4; q++) {
+                if (cambio.fila[q] < 0)
+                    continue;
+                int p = PaletaDeEntrada(rel.ts.metatiles[m][capa * 4 + q]);
+                if (p >= (int)rel.pals.size())
+                    return false;
+                for (uint8_t indice : cambio.indices[q])
+                    if (indice && rel.pals[p].color[indice] != (pz.filas[cambio.fila[q]][indice] & 0x7FFF))
+                        return false;
+            }
+            return true;
+        };
         int destino = -1, mejorCargas = 0;
         auto it = porArte.find(nuevo);
         if (it != porArte.end()) {
             for (int m : it->second) {
-                if (!animado(m))
+                if (!animado(m) || !respetaFilas(m))
                     continue;
                 int cargas = rel.SinCargar(paletasMetatile[m]);
                 if (rel.numCargadas + cargas > f.maxPaletas)
@@ -1362,9 +1569,12 @@ Estampado Estampar(const Formato &f, Tileset &ts, std::vector<MapaDelTileset> &m
         if (destino < 0) {
             Metatile mt;
             for (int c = 0; c < NUM_CAPAS; c++)
-                for (int q = 0; q < 4; q++)
-                    if (!rel.Entrada(TileDeArte(nuevo, c, q), &mt[c * 4 + q]))
+                for (int q = 0; q < 4; q++) {
+                    int fila = c == capa ? cambio.fila[q] : -1;
+                    if (!rel.Entrada(TileDeArte(nuevo, c, q), &mt[c * 4 + q], fila >= 0 ? &pz.filas[fila] : nullptr,
+                                     fila >= 0 ? &cambio.indices[q] : nullptr, fila))
                         return r;
+                }
             for (int m = 0; m < numMetatiles && destino < 0; m++)
                 if (esHueco(m))
                     destino = m;
@@ -1422,8 +1632,31 @@ Estampado Animar(const Formato &f, Tileset &ts, const std::vector<MapaDelTileset
         return falla(PIEZA_NO_VALIDA, "una animacion tiene como mucho 65535 fotogramas, y cada uno dura de 1 a 65535");
     const int ancho = w / 8, alto = h / 8, n = ancho * alto;
 
+    // Con las paletas de la imagen (todos los fotogramas con colores de una misma fila,
+    // la misma en todos), esa fila es su paleta y los tiles guardan sus indices.
+    std::vector<Imagen> fotos = fotogramas;
+    int numFila = -1;
+    bool conFila = true;
+    for (const Imagen &im : fotos) {
+        conFila = conFila && PiezaConPaletas(im, nullptr);
+        for (size_t i = 0; conFila && i < im.indices.size(); i++) {
+            if (im.indices[i] % 16 == 0)
+                continue;
+            int filaPixel = im.indices[i] / 16;
+            if (numFila < 0)
+                numFila = filaPixel;
+            conFila = filaPixel == numFila && im.filas[numFila] == fotos[0].filas[numFila];
+        }
+    }
+    conFila = conFila && numFila >= 0;
+    if (conFila)
+        for (Imagen &im : fotos)
+            for (size_t i = 0; i < im.px.size(); i++)
+                if (im.indices[i] % 16 == 0)
+                    im.px[i] = TRANSPARENTE;
+
     std::set<Color> cs;
-    for (const Imagen &im : fotogramas)
+    for (const Imagen &im : fotos)
         for (Color c : im.px)
             if (c != TRANSPARENTE)
                 cs.insert(c);
@@ -1454,10 +1687,20 @@ Estampado Animar(const Formato &f, Tileset &ts, const std::vector<MapaDelTileset
     }
     Relleno rel(f, sin, tilesFijos, r);
 
-    // La paleta: la de antes si caben sus colores; si no, una que ya los tenga todos,
-    // una para ella sola o, si no queda, la que tenga sitio.
+    // La paleta: con la de la imagen, una que tenga esa fila. Si no, la de antes si caben
+    // sus colores; si no, una que ya los tenga todos, una para ella sola o, si no queda,
+    // la que tenga sitio.
     int pal = -1;
-    if (paletaAntes >= 0 && paletaAntes < (int)rel.pals.size() && rel.pals[paletaAntes].Coste(s) <= rel.pals[paletaAntes].Libres())
+    if (conFila) {
+        std::set<int> usados;
+        for (const Imagen &im : fotos)
+            for (uint8_t i : im.indices)
+                if (i % 16)
+                    usados.insert(i % 16);
+        if (!rel.PaletaDeFila(fotos[0].filas[numFila], usados, numFila, &pal))
+            return r;
+    }
+    if (pal < 0 && paletaAntes >= 0 && paletaAntes < (int)rel.pals.size() && rel.pals[paletaAntes].Coste(s) <= rel.pals[paletaAntes].Libres())
         pal = paletaAntes;
     for (int p = 0; p < (int)rel.pals.size() && pal < 0; p++)
         if (rel.pals[p].Tiene(s, true))
@@ -1479,10 +1722,12 @@ Estampado Animar(const Formato &f, Tileset &ts, const std::vector<MapaDelTileset
     if (pal < 0)
         return falla(SIN_HUECO_PALETAS, "ninguna paleta del tileset tiene sitio para los " + std::to_string(s.size()) +
                                             " colores de la animacion");
-    if (rel.pals[pal].Vacia() && !s.empty())
-        r.paletasNuevas++;
-    r.coloresNuevos += rel.pals[pal].Coste(s);
-    rel.pals[pal].Anade(s);
+    if (!conFila) {
+        if (rel.pals[pal].Vacia() && !s.empty())
+            r.paletasNuevas++;
+        r.coloresNuevos += rel.pals[pal].Coste(s);
+        rel.pals[pal].Anade(s);
+    }
 
     // Los tiles: los suyos si ya estaba; si no, los primeros libres seguidos.
     if (tile < 0) {
@@ -1516,14 +1761,17 @@ Estampado Animar(const Formato &f, Tileset &ts, const std::vector<MapaDelTileset
     an.alto = alto;
     an.paleta = pal;
     an.cada = cada;
-    for (const Imagen &im : fotogramas) {
+    for (const Imagen &im : fotos) {
         std::vector<Tile> fotograma(n);
         for (int ty = 0; ty < alto; ty++)
             for (int tx = 0; tx < ancho; tx++)
                 for (int y = 0; y < 8; y++)
                     for (int x = 0; x < 8; x++) {
-                        Color c = im.en(tx * 8 + x, ty * 8 + y);
-                        fotograma[ty * ancho + tx][y * 8 + x] = c == TRANSPARENTE ? 0 : rel.pals[pal].Busca(c, true);
+                        int px = (ty * 8 + y) * w + tx * 8 + x;
+                        Color c = im.px[px];
+                        fotograma[ty * ancho + tx][y * 8 + x] = c == TRANSPARENTE ? 0
+                                                                : conFila ? im.indices[px] % 16
+                                                                          : rel.pals[pal].Busca(c, true);
                     }
         an.fotogramas.push_back(fotograma);
     }

@@ -51,15 +51,29 @@ void ARgb(Color c, int *r, int *g, int *b);
 
 enum Capa { CAPA_BAJA, CAPA_MEDIA, CAPA_ALTA, NUM_CAPAS };
 
+typedef std::array<Color, 16> Paleta;        // la 0 es la transparente
+
 struct Imagen {
     int ancho = 0, alto = 0;
     std::vector<Color> px;
+    // Un PNG con paleta trae ademas el indice de cada pixel y los colores de su paleta,
+    // de 16 en 16 (filas); si no, estan vacios. Ver PiezaConPaletas.
+    std::vector<uint8_t> indices;
+    std::vector<Paleta> filas;
 
     Imagen() {}
     Imagen(int w, int h) : ancho(w), alto(h), px(w * h, TRANSPARENTE) {}
     Color &en(int x, int y) { return px[y * ancho + x]; }
     Color en(int x, int y) const { return px[y * ancho + x]; }
 };
+
+// Si la pieza trae sus paletas: es un PNG con paleta, organizada en filas de 16 colores
+// como las de la GBA, y cada trozo de 8x8 usa colores de una sola fila. Entonces cada
+// fila es una paleta: al estampar va a una paleta del tileset con esos colores en esos
+// indices (la que ya la tenga, o una nueva), los tiles guardan los indices de la imagen,
+// y el color 0 de cada fila es transparente. Si no, las paletas se reparten solas, y
+// `motivo` dice por que.
+bool PiezaConPaletas(const Imagen &pieza, std::string *motivo);
 
 // Lo que el juego sabe cargar (include/fieldmap.h y include/global.fieldmap.h).
 struct Formato {
@@ -72,7 +86,6 @@ struct Formato {
 };
 
 typedef std::array<uint8_t, 64> Tile;        // indices de color 0-15, por filas
-typedef std::array<Color, 16> Paleta;        // la 0 es la transparente
 // 4 entradas por capa: baja, media, alta. Cada entrada lleva el tile (bits 0-9), los
 // volteos (10 horizontal, 11 vertical) y, desde el bit 12, su paleta del tileset.
 typedef std::array<uint32_t, 12> Metatile;
@@ -180,6 +193,7 @@ struct Estampado {
     int casillas = 0;                     // casillas del mapa que cambian
     int metatilesNuevos = 0, tilesNuevos = 0, coloresNuevos = 0, paletasNuevas = 0;
     int paletasMapa = 0;                  // las que carga el mapa despues de estampar
+    bool paletasDeLaPieza = false;        // con las paletas de la imagen (PiezaConPaletas)
 };
 
 // Estampa `pieza` en la capa `capa` de mapas[objetivo], con su esquina en (x, y) en

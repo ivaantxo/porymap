@@ -305,6 +305,7 @@ void PieceStamper::removePiece() {
 
 void PieceStamper::loadPiece(int index) {
     stopAnimation();
+    this->sheetSource = QImage();
     this->sheetImage = QImage();
     if (index >= 0) {
         QString path = this->comboBox_Pieces->itemData(index, Qt::ToolTipRole).toString();
@@ -314,7 +315,8 @@ void PieceStamper::loadPiece(int index) {
         } else if (image.width() % Tile::pixelWidth() || image.height() % Tile::pixelHeight()) {
             setStatus(QString("%1 mide %2: el ancho y el alto tienen que ser múltiplos de 8.").arg(path).arg(pieceSizeText(image.size())));
         } else {
-            this->sheetImage = image.convertToFormat(QImage::Format_ARGB32);
+            this->sheetSource = image;
+            this->sheetImage = Stamping::displayImage(image);
         }
     }
 
@@ -336,13 +338,20 @@ void PieceStamper::updatePiece() {
         return;
     QRect rect = this->sheetItem->selectedRect().intersected(this->sheetImage.rect());
     this->pieceImage = this->sheetImage.copy(rect);
-    this->piece = Stamping::pieceFromImage(this->pieceImage);
+    const QImage source = (this->sheetSource.isNull() ? this->sheetImage : this->sheetSource).copy(rect);
+    this->piece = Stamping::pieceFromImage(source);
     QString text = QString("Pieza: %1 desde (%2, %3)").arg(pieceSizeText(rect.size())).arg(rect.x()).arg(rect.y());
+    if (!this->piece.filas.empty()) {
+        std::string reason;
+        text += mapeado::PiezaConPaletas(this->piece, &reason)
+              ? QString(" · con las paletas de la imagen")
+              : QString(" · paletas automáticas (%1)").arg(QString::fromStdString(reason));
+    }
 
     const int w = Metatile::pixelWidth(), h = Metatile::pixelHeight();
     if (this->pieceImage.size() == QSize(3 * w, 3 * h)) {
         for (int k = 0; k < 9; k++)
-            this->smartPathPieces[k] = Stamping::pieceFromImage(this->pieceImage.copy((k % 3) * w, (k / 3) * h, w, h));
+            this->smartPathPieces[k] = Stamping::pieceFromImage(source.copy((k % 3) * w, (k / 3) * h, w, h));
         QImage open = this->pieceImage.copy(w, h, w, h);
         this->smartPathPreview = QImage(2 * w, 2 * h, QImage::Format_ARGB32);
         this->smartPathPreview.fill(Qt::transparent);
@@ -425,6 +434,7 @@ void PieceStamper::loadAnimation(int index) {
         const QSignalBlocker blocker(this->comboBox_Pieces);
         this->comboBox_Pieces->setCurrentIndex(-1);
     }
+    this->sheetSource = frames.first();
     this->sheetImage = frames.first();
     this->sheetItem->setImage(this->sheetImage); // Selects all of it, which updates the piece
     this->sheetScene->setSceneRect(this->sheetItem->boundingRect());

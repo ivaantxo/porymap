@@ -13,6 +13,7 @@ View the [Changelog][changelog] to see what's new.
 Este fork añade la pestaña **Piezas**, junto a Metatiles, Collision y Prefabs, para pintar los mapas con arte libre: como porytiles, pero dentro del editor y pintando directamente en el mapa.
 
 - **Importar:** sirve cualquier PNG cuyo ancho y alto sean múltiplos de 8, sin tamaño ni paleta fijados. Puede ser una pieza suelta o una hoja entera; en la hoja se elige con el ratón qué trozo se estampa.
+- **Con sus paletas:** si el PNG es indexado, con la paleta en filas de 16 colores (el 0 de cada fila, transparente) y cada trozo de 8×8 con colores de una sola fila, como una hoja hecha en Aseprite, cada fila va a una paleta del tileset con esos colores en esos índices, y los tiles guardan los índices de la imagen. Debajo de la pieza dice si se estampa «con las paletas de la imagen» o con «paletas automáticas» (y por qué).
 - **Estampar:** con la pestaña abierta y el lápiz, un clic estampa la pieza en la capa elegida (baja, media o alta), en la rejilla de 8 o de 16 píxeles. Arrastrando se repite. Lo transparente de la pieza deja ver lo que había, o lo borra si se marca *Lo transparente borra*.
 - **El tileset se rellena solo:** los colores, los tiles (con volteos) y los metatiles que hagan falta se añaden al tileset primario del mapa en ese momento. Si algo no cabe no se pinta nada, y se avisa de qué falta:
   - el mapa ya carga todas las paletas que caben y a ninguna le caben los colores, o la pieza necesita más paletas nuevas de las que le quedan al mapa;

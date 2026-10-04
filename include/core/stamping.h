@@ -25,8 +25,12 @@ QString unsupportedReason();
 
 mapeado::Formato format(const Tileset *tileset);
 
-// Alpha below 128, or the magenta 248,0,248, is transparent.
+// Alpha below 128, or the magenta 248,0,248, is transparent. An image with a palette also
+// brings its indices and colors, and if each 8x8 tile uses one row of 16 colors, it's
+// stamped with those palettes (mapeado::PiezaConPaletas).
 mapeado::Imagen pieceFromImage(const QImage &image);
+// The image as it will look stamped (with its own palettes, color 0 of each row is transparent).
+QImage displayImage(const QImage &image);
 
 mapeado::Tileset fromTileset(const Tileset *tileset);
 // Writes back into `tileset` whatever differs. Returns whether anything changed.

@@ -93,7 +93,8 @@ private:
     QMetaObject::Connection historyConnection;
     QString pieceListDir; // Project whose piece list is loaded
     QString unsupportedReason;
-    QImage sheetImage;
+    QImage sheetSource;  // As loaded: with a palette, the piece keeps its indices
+    QImage sheetImage;   // As shown
     QImage pieceImage;
     mapeado::Imagen piece;
 

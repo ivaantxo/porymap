@@ -78,7 +78,36 @@ mapeado::Imagen pieceFromImage(const QImage &image) {
             piece.en(x, y) = (qAlpha(line[x]) < 128 || c == magenta) ? mapeado::TRANSPARENTE : c;
         }
     }
+    // With a palette, its indices and colors too, 16 at a time: if each 8x8 tile uses one
+    // row, the piece brings its own palettes (mapeado::PiezaConPaletas).
+    const QVector<QRgb> table = image.colorTable();
+    if (image.format() == QImage::Format_Indexed8 && !table.isEmpty()) {
+        piece.indices.resize(piece.px.size());
+        for (int y = 0; y < image.height(); y++) {
+            const uchar *line = image.constScanLine(y);
+            for (int x = 0; x < image.width(); x++)
+                piece.indices[y * piece.ancho + x] = line[x];
+        }
+        mapeado::Paleta empty;
+        empty.fill(0);
+        piece.filas.assign((table.size() + 15) / 16, empty);
+        for (int i = 0; i < table.size(); i++)
+            piece.filas[i / 16][i % 16] = fromQRgb(table.at(i));
+    }
     return piece;
+}
+
+QImage displayImage(const QImage &image) {
+    QImage argb = image.convertToFormat(QImage::Format_ARGB32);
+    const mapeado::Imagen piece = pieceFromImage(image);
+    if (mapeado::PiezaConPaletas(piece, nullptr)) {
+        // As in the game: color 0 of each row is transparent.
+        for (int y = 0; y < argb.height(); y++)
+            for (int x = 0; x < argb.width(); x++)
+                if (piece.indices[y * piece.ancho + x] % 16 == 0)
+                    argb.setPixel(x, y, qRgba(0, 0, 0, 0));
+    }
+    return argb;
 }
 
 mapeado::Tileset fromTileset(const Tileset *tileset) {
